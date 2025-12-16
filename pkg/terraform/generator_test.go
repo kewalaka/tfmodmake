@@ -20,6 +20,10 @@ func TestToSnakeCase(t *testing.T) {
 		{"HTTPClient", "http_client"},
 		{"simple", "simple"},
 		{"agentPoolProfiles", "agent_pool_profiles"},
+		{"AdminGroupObjectIDs", "admin_group_object_ids"},
+		{"HTTPServer", "http_server"},
+		{"JSONList", "json_list"},
+		{"MyAPIs", "my_apis"},
 	}
 
 	for _, tt := range tests {

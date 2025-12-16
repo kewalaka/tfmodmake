@@ -4,10 +4,10 @@ package terraform
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
@@ -325,13 +325,38 @@ func buildNestedDescription(schema *openapi3.Schema, indent string) string {
 	return sb.String()
 }
 
-var (
-	matchFirstCap = regexp.MustCompile("(.)([A-Z][a-z]+)")
-	matchAllCap   = regexp.MustCompile("([a-z0-9])([A-Z])")
-)
-
-func toSnakeCase(str string) string {
-	snake := matchFirstCap.ReplaceAllString(str, "${1}_${2}")
-	snake = matchAllCap.ReplaceAllString(snake, "${1}_${2}")
-	return strings.ToLower(snake)
+func toSnakeCase(input string) string {
+	var sb strings.Builder
+	runes := []rune(input)
+	for i, r := range runes {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				prev := runes[i-1]
+				if unicode.IsLower(prev) || unicode.IsDigit(prev) {
+					sb.WriteRune('_')
+				} else if unicode.IsUpper(prev) {
+					// Check if we should split here
+					// Standard rule: split if next is lower
+					if i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+						// Exception: if the lower part is just 's' (plural acronym), don't split.
+						
+						// Look ahead for lower case sequence
+						j := i + 1
+						for j < len(runes) && unicode.IsLower(runes[j]) {
+							j++
+						}
+						lowerLen := j - (i + 1)
+						
+						if lowerLen > 1 {
+							sb.WriteRune('_')
+						} else if lowerLen == 1 && runes[i+1] != 's' {
+							sb.WriteRune('_')
+						}
+					}
+				}
+			}
+		}
+		sb.WriteRune(unicode.ToLower(r))
+	}
+	return sb.String()
 }
