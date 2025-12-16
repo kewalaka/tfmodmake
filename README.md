@@ -1,0 +1,81 @@
+# tfmodmake
+
+CLI tool to generate base Terraform configuration (`variables.tf` and `locals.tf`) from an OpenAPI specification.
+
+## Features
+
+*   Parses OpenAPI 3.0 specifications from local files or URLs.
+*   Extracts schema for a specific resource type.
+*   Generates Terraform variables with appropriate types and descriptions.
+*   Handles nested objects and arrays.
+*   Generates validation blocks for top-level enum variables.
+*   Creates a `locals.tf` file to map Terraform variables back to the API JSON structure.
+*   Supports targeting a specific root object (e.g., `properties`) to exclude unwanted fields.
+*   Customizable local variable naming.
+
+## Installation
+
+Build from source:
+
+```bash
+git clone https://github.com/user/tfmodmake.git
+cd tfmodmake
+go build -o tfmodmake cmd/tfmodmake/main.go
+```
+
+## Usage
+
+```bash
+./tfmodmake -spec <path_or_url> -resource <resource_type> [flags]
+```
+
+### Flags
+
+*   `-spec`: (Required) Path or URL to the OpenAPI specification.
+*   `-resource`: (Required) Resource type to generate configuration for (e.g., `Microsoft.ContainerService/managedClusters`).
+*   `-root`: (Optional) Dot-separated path to the root object within the resource schema (e.g., `properties` or `properties.networkProfile`). If specified, only properties under this root are generated as variables.
+*   `-local-name`: (Optional) Name of the local variable to generate in `locals.tf`. Defaults to `resource_body` or a snake_case version of the `-root` path.
+
+## Examples
+
+### Basic Usage
+
+Generate configuration for the entire resource:
+
+```bash
+./tfmodmake \
+  -spec https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/containerservice/resource-manager/Microsoft.ContainerService/aks/stable/2023-01-01/managedClusters.json \
+  -resource Microsoft.ContainerService/managedClusters
+```
+
+### Targeting a Sub-property
+
+Generate configuration only for the `properties` object, excluding top-level fields like `tags` or `location`:
+
+```bash
+./tfmodmake \
+  -spec managedClusters.json \
+  -resource Microsoft.ContainerService/managedClusters \
+  -root properties
+```
+
+This will generate a local variable named `properties`.
+
+### Custom Local Name
+
+Generate configuration for `properties.networkProfile` and name the local variable `aks_network_profile`:
+
+```bash
+./tfmodmake \
+  -spec managedClusters.json \
+  -resource Microsoft.ContainerService/managedClusters \
+  -root properties.networkProfile \
+  -local-name aks_network_profile
+```
+
+## Output
+
+The tool generates two files in the current directory:
+
+1.  `variables.tf`: Contains the input variables.
+2.  `locals.tf`: Contains the local value constructing the JSON body structure.
