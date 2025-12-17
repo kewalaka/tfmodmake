@@ -51,15 +51,19 @@ func generateVariables(schema *openapi3.Schema) error {
 		tfName := toSnakeCase(name)
 		tfType := mapType(propSchema)
 
-		isNestedObject := false
-		if propSchema.Type != nil {
-			if slices.Contains(*propSchema.Type, "object") {
-				isNestedObject = true
+		var nestedDocSchema *openapi3.Schema
+		if propSchema.Type != nil && slices.Contains(*propSchema.Type, "object") {
+			switch {
+			case len(propSchema.Properties) > 0:
+				nestedDocSchema = propSchema
+			case propSchema.AdditionalProperties.Schema != nil && propSchema.AdditionalProperties.Schema.Value != nil:
+				apSchema := propSchema.AdditionalProperties.Schema.Value
+				if apSchema.Type != nil && slices.Contains(*apSchema.Type, "object") && len(apSchema.Properties) > 0 {
+					nestedDocSchema = apSchema
+				}
 			}
 		}
-		if isNestedObject && len(propSchema.Properties) == 0 {
-			isNestedObject = false
-		}
+		isNestedObject := nestedDocSchema != nil
 
 		fmt.Fprintf(f, "variable \"%s\" {\n", tfName)
 
@@ -72,7 +76,11 @@ func generateVariables(schema *openapi3.Schema) error {
 			sb.WriteString(desc)
 			sb.WriteString("\n\n")
 
-			sb.WriteString(buildNestedDescription(propSchema, ""))
+			if nestedDocSchema != propSchema {
+				sb.WriteString("Map values:\n")
+			}
+
+			sb.WriteString(buildNestedDescription(nestedDocSchema, ""))
 
 			fmt.Fprintf(f, "  description = <<-DESCRIPTION\n%s  DESCRIPTION\n", sb.String())
 		} else {
@@ -156,6 +164,10 @@ func constructValue(schema *openapi3.Schema, accessPath string, isRoot bool) str
 
 	if slices.Contains(types, "object") {
 		if len(schema.Properties) == 0 {
+			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
+				mappedValue := constructValue(schema.AdditionalProperties.Schema.Value, "value", false)
+				return fmt.Sprintf("%s == null ? null : { for k, value in %s : k => %s }", accessPath, accessPath, mappedValue)
+			}
 			return accessPath // map(string) or free-form, passed as is
 		}
 
@@ -238,6 +250,10 @@ func mapType(schema *openapi3.Schema) string {
 	}
 	if slices.Contains(types, "object") {
 		if len(schema.Properties) == 0 {
+			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
+				valueType := mapType(schema.AdditionalProperties.Schema.Value)
+				return fmt.Sprintf("map(%s)", valueType)
+			}
 			return "map(string)" // Fallback for free-form objects
 		}
 		var fields []string
@@ -339,14 +355,14 @@ func toSnakeCase(input string) string {
 					// Standard rule: split if next is lower
 					if i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
 						// Exception: if the lower part is just 's' (plural acronym), don't split.
-						
+
 						// Look ahead for lower case sequence
 						j := i + 1
 						for j < len(runes) && unicode.IsLower(runes[j]) {
 							j++
 						}
 						lowerLen := j - (i + 1)
-						
+
 						if lowerLen > 1 {
 							sb.WriteRune('_')
 						} else if lowerLen == 1 && runes[i+1] != 's' {
