@@ -12,6 +12,8 @@ CLI tool to generate base Terraform configuration (`variables.tf` and `locals.tf
 *   Creates a `locals.tf` file to map Terraform variables back to the API JSON structure.
 *   Supports targeting a specific root object (e.g., `properties`) to exclude unwanted fields.
 *   Customizable local variable naming.
+*   Generates scaffolded `main.tf` and `outputs.tf` for an `azapi_resource`.
+*   Includes base variables for `name`, `parent_id`, and conditional `tags` (when the resource supports tags).
 
 ## Installation
 
@@ -75,7 +77,9 @@ Generate configuration for `properties.networkProfile` and name the local variab
 
 ## Output
 
-The tool generates two files in the current directory:
+The tool generates four files in the current directory:
 
-1.  `variables.tf`: Contains the input variables.
+1.  `variables.tf`: Contains the input variables (including `name`, `parent_id`, and `tags` when supported).
 2.  `locals.tf`: Contains the local value constructing the JSON body structure.
+3.  `main.tf`: Scaffold for the `azapi_resource` using the generated locals.
+4.  `outputs.tf`: Outputs exposing the resource ID and name.

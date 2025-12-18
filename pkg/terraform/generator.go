@@ -12,23 +12,53 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// Generate generates variables.tf and locals.tf based on the schema.
-func Generate(schema *openapi3.Schema, resourceType string, localName string) error {
-	if err := generateVariables(schema); err != nil {
+// Generate generates variables.tf, locals.tf, main.tf, and outputs.tf based on the schema.
+func Generate(schema *openapi3.Schema, resourceType string, localName string, supportsTags bool) error {
+	if err := generateVariables(schema, supportsTags); err != nil {
 		return err
 	}
 	if err := generateLocals(schema, localName); err != nil {
 		return err
 	}
+	if err := generateMain(resourceType, localName, supportsTags); err != nil {
+		return err
+	}
+	if err := generateOutputs(); err != nil {
+		return err
+	}
 	return nil
 }
 
-func generateVariables(schema *openapi3.Schema) error {
+func generateVariables(schema *openapi3.Schema, supportsTags bool) error {
 	f, err := os.Create("variables.tf")
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+
+	fmt.Fprint(f, `variable "name" {
+  description = "The name of the resource."
+  type        = string
+}
+
+variable "parent_id" {
+  description = "The parent resource ID for this resource."
+  type        = string
+}
+
+`)
+
+	if supportsTags {
+		fmt.Fprint(f, `
+variable "tags" {
+  description = "Tags to apply to the resource."
+  type        = map(string)
+  default     = {}
+}
+`)
+	}
+
+	fmt.Fprint(f, "\n")
 
 	// Sort properties for deterministic output
 	var keys []string
@@ -375,4 +405,64 @@ func toSnakeCase(input string) string {
 		sb.WriteRune(unicode.ToLower(r))
 	}
 	return sb.String()
+}
+
+// SupportsTags reports whether the schema includes a writable top-level "tags" property.
+func SupportsTags(schema *openapi3.Schema) bool {
+	if schema == nil {
+		return false
+	}
+	tagsProp, ok := schema.Properties["tags"]
+	if !ok || tagsProp == nil || tagsProp.Value == nil {
+		return false
+	}
+	if tagsProp.Value.ReadOnly {
+		return false
+	}
+	return true
+}
+
+func generateMain(resourceType, localName string, supportsTags bool) error {
+	f, err := os.Create("main.tf")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	resourceTypeWithAPIVersion := fmt.Sprintf("%s@apiVersion", resourceType)
+
+	fmt.Fprintf(f, "resource \"azapi_resource\" \"this\" {\n")
+	fmt.Fprintf(f, "  type      = \"%s\"\n", resourceTypeWithAPIVersion)
+	fmt.Fprintf(f, "  name      = var.name\n")
+	fmt.Fprintf(f, "  parent_id = var.parent_id\n")
+	fmt.Fprintf(f, "  body = {\n")
+	fmt.Fprintf(f, "    properties = local.%s\n", localName)
+	fmt.Fprintf(f, "  }\n")
+	if supportsTags {
+		fmt.Fprintf(f, "  tags = var.tags\n")
+	}
+	fmt.Fprintf(f, "}\n")
+
+	return nil
+}
+
+func generateOutputs() error {
+	f, err := os.Create("outputs.tf")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fmt.Fprint(f, `output "resource_id" {
+  description = "The ID of the created resource."
+  value       = azapi_resource.this.id
+}
+
+output "name" {
+  description = "The name of the created resource."
+  value       = azapi_resource.this.name
+}
+`)
+
+	return nil
 }

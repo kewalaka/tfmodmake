@@ -78,7 +78,9 @@ func TestGenerate(t *testing.T) {
 	}
 
 	// Run Generate
-	err = Generate(schema, "testResource", "test_local")
+	supportsTags := SupportsTags(schema)
+
+	err = Generate(schema, "testResource", "test_local", supportsTags)
 	require.NoError(t, err)
 
 	// Check variables.tf
@@ -86,6 +88,9 @@ func TestGenerate(t *testing.T) {
 	require.NoError(t, err)
 	varsStr := string(varsContent)
 
+	assert.Contains(t, varsStr, `variable "name"`)
+	assert.Contains(t, varsStr, `variable "parent_id"`)
+	assert.NotContains(t, varsStr, `variable "tags"`)
 	assert.Contains(t, varsStr, `variable "location"`)
 	assert.Contains(t, varsStr, `variable "properties"`)
 	assert.NotContains(t, varsStr, `variable "read_only_prop"`) // Should be filtered out
@@ -100,6 +105,24 @@ func TestGenerate(t *testing.T) {
 	assert.Contains(t, localsStr, "location = var.location")
 	assert.Contains(t, localsStr, "writableProp = var.properties.writable_prop")
 	assert.NotContains(t, localsStr, "readOnlyProp")
+
+	mainContent, err := os.ReadFile("main.tf")
+	require.NoError(t, err)
+	mainStr := string(mainContent)
+
+	assert.Contains(t, mainStr, `resource "azapi_resource" "this" {`)
+	assert.Contains(t, mainStr, `type      = "testResource@apiVersion"`)
+	assert.Contains(t, mainStr, "properties = local.test_local")
+	assert.NotContains(t, mainStr, "tags = var.tags")
+
+	outputsContent, err := os.ReadFile("outputs.tf")
+	require.NoError(t, err)
+	outputsStr := string(outputsContent)
+
+	assert.Contains(t, outputsStr, `output "resource_id"`)
+	assert.Contains(t, outputsStr, `output "name"`)
+	assert.Contains(t, outputsStr, "azapi_resource.this.id")
+	assert.Contains(t, outputsStr, "azapi_resource.this.name")
 }
 
 func TestGenerate_IncludesAdditionalPropertiesDescription(t *testing.T) {
@@ -145,7 +168,7 @@ func TestGenerate_IncludesAdditionalPropertiesDescription(t *testing.T) {
 		},
 	}
 
-	err = Generate(schema, "testResource", "local_map")
+	err = Generate(schema, "testResource", "local_map", false)
 	require.NoError(t, err)
 
 	varsContent, err := os.ReadFile("variables.tf")
@@ -158,6 +181,47 @@ func TestGenerate_IncludesAdditionalPropertiesDescription(t *testing.T) {
 	assert.Contains(t, varsStr, "Map values:")
 	assert.Contains(t, varsStr, "- `max_concurrent` - Maximum concurrent queries.")
 	assert.Contains(t, varsStr, "- `query_logging` - Enable query logging.")
+}
+
+func TestGenerate_WithTagsSupport(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"location": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+			"tags": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					AdditionalProperties: openapi3.AdditionalProperties{
+						Schema: &openapi3.SchemaRef{
+							Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", true)
+	require.NoError(t, err)
+
+	varsContent, err := os.ReadFile("variables.tf")
+	require.NoError(t, err)
+	varsStr := string(varsContent)
+	assert.Contains(t, varsStr, `variable "tags"`)
+
+	mainContent, err := os.ReadFile("main.tf")
+	require.NoError(t, err)
+	mainStr := string(mainContent)
+	assert.Contains(t, mainStr, "tags = var.tags")
 }
 
 func TestMapType(t *testing.T) {
