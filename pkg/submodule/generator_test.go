@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 )
 
 func TestGenerateCreatesSubmoduleFiles(t *testing.T) {
@@ -62,5 +64,33 @@ variable "replicas" {
 	}
 	if !strings.Contains(string(mainContent), "replicas = each.value.replicas") {
 		t.Fatalf("main file missing replicas argument")
+	}
+}
+
+func TestBuildTypeTokensMarksNonRequiredAsOptional(t *testing.T) {
+	module := &tfconfig.Module{
+		Variables: map[string]*tfconfig.Variable{
+			"subject": {
+				Type:     "string",
+				Required: false,
+			},
+			"claims_matching_expression": {
+				Type:     "string",
+				Required: true,
+			},
+		},
+	}
+
+	tokens, err := buildTypeTokens(module)
+	if err != nil {
+		t.Fatalf("buildTypeTokens returned error: %v", err)
+	}
+
+	content := string(tokens.Bytes())
+	if !strings.Contains(content, "subject = optional(string)") {
+		t.Fatalf("expected subject to be optional, got: %s", content)
+	}
+	if strings.Contains(content, "claims_matching_expression = optional(string)") {
+		t.Fatalf("claims_matching_expression should not be optional, got: %s", content)
 	}
 }

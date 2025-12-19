@@ -70,7 +70,7 @@ func buildTypeTokens(module *tfconfig.Module) (hclwrite.Tokens, error) {
 		if typeExpr == "" {
 			typeExpr = "any"
 		}
-		if variable.Default != nil {
+		if !variable.Required {
 			typeExpr = fmt.Sprintf("optional(%s)", typeExpr)
 		}
 		sb.WriteString("  ")
@@ -103,7 +103,7 @@ func writeMainFile(moduleName, sourcePath string, module *tfconfig.Module) error
 
 	block := body.AppendNewBlock("module", []string{moduleName})
 	blockBody := block.Body()
-	blockBody.SetAttributeValue("source", cty.StringVal(sourcePath))
+	blockBody.SetAttributeValue("source", cty.StringVal(fmt.Sprintf("./%s", sourcePath)))
 
 	forEachTokens, err := parseExpressionTokens(fmt.Sprintf("var.%s", moduleName))
 	if err != nil {

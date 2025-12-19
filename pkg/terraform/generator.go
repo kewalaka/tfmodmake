@@ -76,10 +76,10 @@ func generateTerraform() error {
 	tfBody.SetAttributeValue("required_version", cty.StringVal("~> 1.12"))
 
 	providers := tfBody.AppendNewBlock("required_providers", nil)
-	azapi := providers.Body().AppendNewBlock("azapi", nil)
-	azapiBody := azapi.Body()
-	azapiBody.SetAttributeValue("source", cty.StringVal("azure/azapi"))
-	azapiBody.SetAttributeValue("version", cty.StringVal("~> 2.7"))
+	providers.Body().SetAttributeValue("azapi", cty.ObjectVal(map[string]cty.Value{
+		"source":  cty.StringVal("azure/azapi"),
+		"version": cty.StringVal("~> 2.7"),
+	}))
 
 	return writeHCLFile("terraform.tf", file)
 }
@@ -95,6 +95,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags bool) error {
 		if err := setExpressionAttribute(varBody, "type", typeExpr); err != nil {
 			return nil, err
 		}
+		body.AppendNewline()
 		return varBody, nil
 	}
 
@@ -124,7 +125,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags bool) error {
 		sort.Strings(keys)
 	}
 
-	for _, name := range keys {
+	for i, name := range keys {
 		prop := schema.Properties[name]
 		if prop == nil || prop.Value == nil {
 			continue
@@ -216,6 +217,10 @@ func generateVariables(schema *openapi3.Schema, supportsTags bool) error {
 			}
 
 			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValuesRaw, ", "))))
+		}
+
+		if i < len(keys)-1 {
+			body.AppendNewline()
 		}
 	}
 
