@@ -68,6 +68,7 @@ func main() {
 	}
 
 	supportsTags := terraform.SupportsTags(schema)
+	supportsLocation := terraform.SupportsLocation(schema)
 
 	if *rootPath != "" {
 		schema, err = openapi.NavigateSchema(schema, *rootPath)
@@ -85,7 +86,7 @@ func main() {
 		finalLocalName = toSnakeCase(finalLocalName)
 	}
 
-	if err := terraform.Generate(schema, *resourceType, finalLocalName, apiVersion, supportsTags); err != nil {
+	if err := terraform.Generate(schema, *resourceType, finalLocalName, apiVersion, supportsTags, supportsLocation); err != nil {
 		log.Fatalf("Failed to generate terraform files: %v", err)
 	}
 

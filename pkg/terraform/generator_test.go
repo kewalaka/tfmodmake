@@ -80,9 +80,10 @@ func TestGenerate(t *testing.T) {
 	}
 
 	supportsTags := SupportsTags(schema)
+	supportsLocation := SupportsLocation(schema)
 
 	apiVersion := "2024-01-01"
-	err = Generate(schema, "testResource", "test_local", apiVersion, supportsTags)
+	err = Generate(schema, "testResource", "test_local", apiVersion, supportsTags, supportsLocation)
 	require.NoError(t, err)
 
 	varsBody := parseHCLBody(t, "variables.tf")
@@ -124,6 +125,7 @@ func TestGenerate(t *testing.T) {
 	assert.Equal(t, "testResource@2024-01-01", attributeStringValue(t, resourceBlock.Body.Attributes["type"]))
 	assert.Equal(t, "var.name", expressionString(t, resourceBlock.Body.Attributes["name"].Expr))
 	assert.Equal(t, "var.parent_id", expressionString(t, resourceBlock.Body.Attributes["parent_id"].Expr))
+	assert.Equal(t, "var.location", expressionString(t, resourceBlock.Body.Attributes["location"].Expr))
 	bodyExpr := expressionString(t, resourceBlock.Body.Attributes["body"].Expr)
 	assert.Contains(t, bodyExpr, "properties = local.test_local")
 	assert.Nil(t, resourceBlock.Body.Attributes["tags"])
@@ -181,7 +183,9 @@ func TestGenerate_IncludesAdditionalPropertiesDescription(t *testing.T) {
 		},
 	}
 
-	err = Generate(schema, "testResource", "local_map", "", false)
+	supportsLocation := SupportsLocation(schema)
+
+	err = Generate(schema, "testResource", "local_map", "", false, supportsLocation)
 	require.NoError(t, err)
 
 	varsBody := parseHCLBody(t, "variables.tf")
@@ -220,7 +224,9 @@ func TestGenerate_WithTagsSupport(t *testing.T) {
 		},
 	}
 
-	err = Generate(schema, "testResource", "resource_body", "", true)
+	supportsLocation := SupportsLocation(schema)
+
+	err = Generate(schema, "testResource", "resource_body", "", true, supportsLocation)
 	require.NoError(t, err)
 
 	varsBody := parseHCLBody(t, "variables.tf")
@@ -231,6 +237,7 @@ func TestGenerate_WithTagsSupport(t *testing.T) {
 	mainBody := parseHCLBody(t, "main.tf")
 	resourceBlock := requireBlock(t, mainBody, "resource", "azapi_resource", "this")
 	assert.Equal(t, "var.tags", expressionString(t, resourceBlock.Body.Attributes["tags"].Expr))
+	assert.Equal(t, "var.location", expressionString(t, resourceBlock.Body.Attributes["location"].Expr))
 }
 
 func TestGenerate_UsesPlaceholderWhenVersionMissing(t *testing.T) {
@@ -255,7 +262,9 @@ func TestGenerate_UsesPlaceholderWhenVersionMissing(t *testing.T) {
 	}
 
 	supportsTags := SupportsTags(schema)
-	err = Generate(schema, "testResource", "placeholder_local", "", supportsTags)
+	supportsLocation := SupportsLocation(schema)
+
+	err = Generate(schema, "testResource", "placeholder_local", "", supportsTags, supportsLocation)
 	require.NoError(t, err)
 
 	mainBody := parseHCLBody(t, "main.tf")
@@ -273,7 +282,7 @@ func TestGenerate_WithNilSchemaSetsEmptyBody(t *testing.T) {
 	err = os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	err = Generate(nil, "testResource", "unused_local", "2024-01-01", false)
+	err = Generate(nil, "testResource", "unused_local", "2024-01-01", false, false)
 	require.NoError(t, err)
 
 	varsBody := parseHCLBody(t, "variables.tf")

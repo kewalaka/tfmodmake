@@ -16,13 +16,13 @@ import (
 )
 
 // Generate generates variables.tf, locals.tf, main.tf, and outputs.tf based on the schema.
-func Generate(schema *openapi3.Schema, resourceType string, localName string, apiVersion string, supportsTags bool) error {
+func Generate(schema *openapi3.Schema, resourceType string, localName string, apiVersion string, supportsTags bool, supportsLocation bool) error {
 	hasSchema := schema != nil
 
 	if err := generateTerraform(); err != nil {
 		return err
 	}
-	if err := generateVariables(schema, supportsTags); err != nil {
+	if err := generateVariables(schema, supportsTags, supportsLocation); err != nil {
 		return err
 	}
 	if hasSchema {
@@ -30,7 +30,7 @@ func Generate(schema *openapi3.Schema, resourceType string, localName string, ap
 			return err
 		}
 	}
-	if err := generateMain(resourceType, apiVersion, localName, supportsTags, hasSchema); err != nil {
+	if err := generateMain(resourceType, apiVersion, localName, supportsTags, supportsLocation, hasSchema); err != nil {
 		return err
 	}
 	if err := generateOutputs(); err != nil {
@@ -84,7 +84,7 @@ func generateTerraform() error {
 	return writeHCLFile("terraform.tf", file)
 }
 
-func generateVariables(schema *openapi3.Schema, supportsTags bool) error {
+func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
@@ -105,6 +105,28 @@ func generateVariables(schema *openapi3.Schema, supportsTags bool) error {
 
 	if _, err := appendVariable("parent_id", "The parent resource ID for this resource.", "string"); err != nil {
 		return err
+	}
+
+	if supportsLocation {
+		locationDescription := "The location of the resource."
+		locationType := "string"
+		if schema != nil {
+			if propRef, ok := schema.Properties["location"]; ok && propRef != nil && propRef.Value != nil {
+				propSchema := propRef.Value
+				if propSchema.Description != "" {
+					locationDescription = strings.ReplaceAll(propSchema.Description, "\n", " ")
+				}
+				locationType = mapType(propSchema)
+			}
+		}
+
+		locationBody, err := appendVariable("location", locationDescription, locationType)
+		if err != nil {
+			return err
+		}
+		if err := setExpressionAttribute(locationBody, "default", "null"); err != nil {
+			return err
+		}
 	}
 
 	if supportsTags {
@@ -128,6 +150,12 @@ func generateVariables(schema *openapi3.Schema, supportsTags bool) error {
 	for i, name := range keys {
 		prop := schema.Properties[name]
 		if prop == nil || prop.Value == nil {
+			continue
+		}
+		if supportsTags && name == "tags" {
+			continue
+		}
+		if supportsLocation && name == "location" {
 			continue
 		}
 		propSchema := prop.Value
@@ -483,7 +511,22 @@ func SupportsTags(schema *openapi3.Schema) bool {
 	return true
 }
 
-func generateMain(resourceType, apiVersion, localName string, supportsTags, hasSchema bool) error {
+// SupportsLocation reports whether the schema includes a writable top-level "location" property.
+func SupportsLocation(schema *openapi3.Schema) bool {
+	if schema == nil {
+		return false
+	}
+	locationProp, ok := schema.Properties["location"]
+	if !ok || locationProp == nil || locationProp.Value == nil {
+		return false
+	}
+	if locationProp.Value.ReadOnly {
+		return false
+	}
+	return true
+}
+
+func generateMain(resourceType, apiVersion, localName string, supportsTags, supportsLocation, hasSchema bool) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
@@ -501,6 +544,11 @@ func generateMain(resourceType, apiVersion, localName string, supportsTags, hasS
 	}
 	if err := setExpressionAttribute(resourceBody, "parent_id", "var.parent_id"); err != nil {
 		return err
+	}
+	if supportsLocation {
+		if err := setExpressionAttribute(resourceBody, "location", "var.location"); err != nil {
+			return err
+		}
 	}
 
 	bodyExpr := "{}"
