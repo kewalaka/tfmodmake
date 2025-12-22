@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
+	"github.com/matt-FFFFFF/tfmodmake/pkg/hclgen"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -41,7 +42,9 @@ func Generate(modulePath string) error {
 		return fmt.Errorf("failed to build variable type: %w", err)
 	}
 
-	if err := writeVariablesFile(moduleName, typeTokens); err != nil {
+	desc := buildDescription(module)
+
+	if err := writeVariablesFile(moduleName, typeTokens, desc); err != nil {
 		return fmt.Errorf("failed to write variables.submodule.tf: %w", err)
 	}
 
@@ -50,6 +53,18 @@ func Generate(modulePath string) error {
 	}
 
 	return nil
+}
+
+func buildDescription(module *tfconfig.Module) string {
+	sb := strings.Builder{}
+	sb.WriteString("Map of instances for the submodule with the following attributes:\n\n")
+	for k, v := range module.Variables {
+		if k == "parent_id" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("**%s**\n%s\n", k, v.Description))
+	}
+	return sb.String()
 }
 
 func buildTypeTokens(module *tfconfig.Module) (hclwrite.Tokens, error) {
@@ -62,35 +77,39 @@ func buildTypeTokens(module *tfconfig.Module) (hclwrite.Tokens, error) {
 	}
 	sort.Strings(variableNames)
 
-	var sb strings.Builder
-	sb.WriteString("map(object({\n")
+	var attrs []hclwrite.ObjectAttrTokens
 	for _, name := range variableNames {
 		variable := module.Variables[name]
 		typeExpr := strings.TrimSpace(variable.Type)
 		if typeExpr == "" {
 			typeExpr = "any"
 		}
-		if !variable.Required {
-			typeExpr = fmt.Sprintf("optional(%s)", typeExpr)
-		}
-		sb.WriteString("  ")
-		sb.WriteString(name)
-		sb.WriteString(" = ")
-		sb.WriteString(typeExpr)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("}))")
 
-	return parseExpressionTokens(sb.String())
+		typeTokens, err := parseExpressionTokens(typeExpr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse type expression for %s: %w", name, err)
+		}
+
+		if !variable.Required {
+			typeTokens = hclwrite.TokensForFunctionCall("optional", typeTokens)
+		}
+
+		attrs = append(attrs, hclwrite.ObjectAttrTokens{
+			Name:  hclwrite.TokensForIdentifier(name),
+			Value: typeTokens,
+		})
+	}
+
+	return hclwrite.TokensForFunctionCall("map", hclwrite.TokensForFunctionCall("object", hclwrite.TokensForObject(attrs))), nil
 }
 
-func writeVariablesFile(moduleName string, typeTokens hclwrite.Tokens) error {
+func writeVariablesFile(moduleName string, typeTokens hclwrite.Tokens, description string) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
 	block := body.AppendNewBlock("variable", []string{moduleName})
 	blockBody := block.Body()
-	blockBody.SetAttributeValue("description", cty.StringVal(fmt.Sprintf("Instances of the %s submodule.", moduleName)))
+	blockBody.SetAttributeRaw("description", hclgen.TokensForHeredoc(description))
 	blockBody.SetAttributeRaw("type", typeTokens)
 
 	filename := fmt.Sprintf("variables.%s.tf", moduleName)
@@ -105,11 +124,7 @@ func writeMainFile(moduleName, sourcePath string, module *tfconfig.Module) error
 	blockBody := block.Body()
 	blockBody.SetAttributeValue("source", cty.StringVal(fmt.Sprintf("./%s", sourcePath)))
 
-	forEachTokens, err := parseExpressionTokens(fmt.Sprintf("var.%s", moduleName))
-	if err != nil {
-		return fmt.Errorf("failed to build for_each expression: %w", err)
-	}
-	blockBody.SetAttributeRaw("for_each", forEachTokens)
+	blockBody.SetAttributeRaw("for_each", hclgen.TokensForTraversal("var", moduleName))
 
 	var variableNames []string
 	for name := range module.Variables {
@@ -119,19 +134,11 @@ func writeMainFile(moduleName, sourcePath string, module *tfconfig.Module) error
 
 	for _, name := range variableNames {
 		if name == "parent_id" {
-			exprTokens, err := parseExpressionTokens("azapi_resource.this.id")
-			if err != nil {
-				return fmt.Errorf("failed to build parent_id expression: %w", err)
-			}
-			blockBody.SetAttributeRaw(name, exprTokens)
+			blockBody.SetAttributeRaw(name, hclgen.TokensForTraversal("azapi_resource", "this", "id"))
 			continue
 		}
 
-		exprTokens, err := parseExpressionTokens(fmt.Sprintf("each.value.%s", name))
-		if err != nil {
-			return fmt.Errorf("failed to build expression for %s: %w", name, err)
-		}
-		blockBody.SetAttributeRaw(name, exprTokens)
+		blockBody.SetAttributeRaw(name, hclgen.TokensForTraversal("each", "value", name))
 	}
 
 	filename := fmt.Sprintf("main.%s.tf", moduleName)

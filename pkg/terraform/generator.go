@@ -3,15 +3,15 @@ package terraform
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"sort"
 	"strings"
 	"unicode"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
+	"github.com/matt-FFFFFF/tfmodmake/pkg/hclgen"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -39,34 +39,6 @@ func Generate(schema *openapi3.Schema, resourceType string, localName string, ap
 	return nil
 }
 
-func setExpressionAttribute(body *hclwrite.Body, name, expr string) error {
-	tokens, err := tokensForExpression(expr)
-	if err != nil {
-		return fmt.Errorf("parsing expression %q: %w", expr, err)
-	}
-	body.SetAttributeRaw(name, tokens)
-	return nil
-}
-
-func tokensForExpression(expr string) (hclwrite.Tokens, error) {
-	content := fmt.Sprintf("attr = %s\n", expr)
-	file, diag := hclwrite.ParseConfig([]byte(content), "expression.hcl", hcl.Pos{Line: 1, Column: 1})
-	if diag.HasErrors() {
-		return nil, diag
-	}
-
-	attr := file.Body().GetAttribute("attr")
-	if attr == nil {
-		return nil, fmt.Errorf("unable to parse expression")
-	}
-
-	return attr.Expr().BuildTokens(nil), nil
-}
-
-func writeHCLFile(path string, file *hclwrite.File) error {
-	return os.WriteFile(path, file.Bytes(), 0o644)
-}
-
 func generateTerraform() error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
@@ -81,62 +53,49 @@ func generateTerraform() error {
 		"version": cty.StringVal("~> 2.7"),
 	}))
 
-	return writeHCLFile("terraform.tf", file)
+	return hclgen.WriteFile("terraform.tf", file)
 }
 
 func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
-	appendVariable := func(name, description, typeExpr string) (*hclwrite.Body, error) {
+	appendVariable := func(name, description string, typeTokens hclwrite.Tokens) (*hclwrite.Body, error) {
 		block := body.AppendNewBlock("variable", []string{name})
 		varBody := block.Body()
-		varBody.SetAttributeValue("description", cty.StringVal(description))
-		if err := setExpressionAttribute(varBody, "type", typeExpr); err != nil {
-			return nil, err
-		}
-		body.AppendNewline()
+		hclgen.SetDescriptionAttribute(varBody, strings.TrimSpace(description))
+		varBody.SetAttributeRaw("type", typeTokens)
 		return varBody, nil
 	}
 
-	if _, err := appendVariable("name", "The name of the resource.", "string"); err != nil {
+	if _, err := appendVariable("name", "The name of the resource.", hclwrite.TokensForIdentifier("string")); err != nil {
 		return err
 	}
+	body.AppendNewline()
 
-	if _, err := appendVariable("parent_id", "The parent resource ID for this resource.", "string"); err != nil {
+	if _, err := appendVariable("parent_id", "The parent resource ID for this resource.", hclwrite.TokensForIdentifier("string")); err != nil {
 		return err
 	}
+	body.AppendNewline()
 
 	if supportsLocation {
 		locationDescription := "The location of the resource."
-		locationType := "string"
-		if schema != nil {
-			if propRef, ok := schema.Properties["location"]; ok && propRef != nil && propRef.Value != nil {
-				propSchema := propRef.Value
-				if propSchema.Description != "" {
-					locationDescription = strings.ReplaceAll(propSchema.Description, "\n", " ")
-				}
-				locationType = mapType(propSchema)
-			}
-		}
+		locationType := hclwrite.TokensForIdentifier("string")
 
-		locationBody, err := appendVariable("location", locationDescription, locationType)
+		_, err := appendVariable("location", locationDescription, locationType)
 		if err != nil {
 			return err
 		}
-		if err := setExpressionAttribute(locationBody, "default", "null"); err != nil {
-			return err
-		}
+		body.AppendNewline()
 	}
 
 	if supportsTags {
-		tagsBody, err := appendVariable("tags", "Tags to apply to the resource.", "map(string)")
+		tagsBody, err := appendVariable("tags", "Tags to apply to the resource.", hclwrite.TokensForFunctionCall("map", hclwrite.TokensForIdentifier("string")))
 		if err != nil {
 			return err
 		}
-		if err := setExpressionAttribute(tagsBody, "default", "null"); err != nil {
-			return err
-		}
+		tagsBody.SetAttributeValue("default", cty.NullVal(cty.Map(cty.String)))
+		body.AppendNewline()
 	}
 
 	var keys []string
@@ -201,49 +160,46 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 
 			sb.WriteString(buildNestedDescription(nestedDocSchema, ""))
 
-			varBody.SetAttributeValue("description", cty.StringVal(sb.String()))
+			hclgen.SetDescriptionAttribute(varBody, sb.String())
 		} else {
 			description := propSchema.Description
 			if description == "" {
 				description = fmt.Sprintf("The %s of the resource.", name)
 			}
-			description = strings.ReplaceAll(description, "\n", " ")
-			varBody.SetAttributeValue("description", cty.StringVal(description))
-		}
-
-		if err := setExpressionAttribute(varBody, "type", tfType); err != nil {
-			return err
+			hclgen.SetDescriptionAttribute(varBody, description)
 		}
 
 		isRequired := slices.Contains(schema.Required, name)
 		if !isRequired {
-			if err := setExpressionAttribute(varBody, "default", "null"); err != nil {
-				return err
-			}
+			varBody.SetAttributeRaw("default", hclwrite.TokensForIdentifier("null"))
 		}
 
 		if len(propSchema.Enum) > 0 {
-			var enumValues []string
 			var enumValuesRaw []string
+			var enumTokens []hclwrite.Tokens
 			for _, v := range propSchema.Enum {
-				enumValues = append(enumValues, fmt.Sprintf("\"%v\"", v))
 				enumValuesRaw = append(enumValuesRaw, fmt.Sprintf("%v", v))
+				enumTokens = append(enumTokens, hclwrite.TokensForValue(cty.StringVal(fmt.Sprintf("%v", v))))
 			}
-			enumStr := fmt.Sprintf("[%s]", strings.Join(enumValues, ", "))
+
+			varRef := hclgen.TokensForTraversal("var", tfName)
+			enumList := hclwrite.TokensForTuple(enumTokens)
+			containsCall := hclwrite.TokensForFunctionCall("contains", enumList, varRef)
+
+			var condition hclwrite.Tokens
+			if !isRequired {
+				condition = append(condition, varRef...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+				condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" || ")})
+				condition = append(condition, containsCall...)
+			} else {
+				condition = containsCall
+			}
 
 			validation := varBody.AppendNewBlock("validation", nil)
 			validationBody := validation.Body()
-
-			if !isRequired {
-				if err := setExpressionAttribute(validationBody, "condition", fmt.Sprintf("var.%s == null || contains(%s, var.%s)", tfName, enumStr, tfName)); err != nil {
-					return err
-				}
-			} else {
-				if err := setExpressionAttribute(validationBody, "condition", fmt.Sprintf("contains(%s, var.%s)", enumStr, tfName)); err != nil {
-					return err
-				}
-			}
-
+			validationBody.SetAttributeRaw("condition", condition)
 			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValuesRaw, ", "))))
 		}
 
@@ -252,7 +208,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 		}
 	}
 
-	return writeHCLFile("variables.tf", file)
+	return hclgen.WriteFile("variables.tf", file)
 }
 
 func generateLocals(schema *openapi3.Schema, localName string) error {
@@ -266,15 +222,13 @@ func generateLocals(schema *openapi3.Schema, localName string) error {
 	locals := body.AppendNewBlock("locals", nil)
 	localBody := locals.Body()
 
-	valueExpression := constructValue(schema, "var", true)
-	if err := setExpressionAttribute(localBody, localName, valueExpression); err != nil {
-		return err
-	}
+	valueExpression := constructValue(schema, hclwrite.TokensForIdentifier("var"), true)
+	localBody.SetAttributeRaw(localName, valueExpression)
 
-	return writeHCLFile("locals.tf", file)
+	return hclgen.WriteFile("locals.tf", file)
 }
 
-func constructValue(schema *openapi3.Schema, accessPath string, isRoot bool) string {
+func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool) hclwrite.Tokens {
 	if schema.Type == nil {
 		return accessPath
 	}
@@ -284,13 +238,31 @@ func constructValue(schema *openapi3.Schema, accessPath string, isRoot bool) str
 	if slices.Contains(types, "object") {
 		if len(schema.Properties) == 0 {
 			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
-				mappedValue := constructValue(schema.AdditionalProperties.Schema.Value, "value", false)
-				return fmt.Sprintf("%s == null ? null : { for k, value in %s : k => %s }", accessPath, accessPath, mappedValue)
+				mappedValue := constructValue(schema.AdditionalProperties.Schema.Value, hclwrite.TokensForIdentifier("value"), false)
+
+				var tokens hclwrite.Tokens
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenOBrace, Bytes: []byte("{")})
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("for")})
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("k")})
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenComma, Bytes: []byte(",")})
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("value")})
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("in")})
+				tokens = append(tokens, accessPath...)
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("k")})
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenFatArrow, Bytes: []byte("=>")})
+				tokens = append(tokens, mappedValue...)
+				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenCBrace, Bytes: []byte("}")})
+
+				if !isRoot {
+					return hclgen.NullEqualityTernary(accessPath, tokens)
+				}
+				return tokens
 			}
 			return accessPath // map(string) or free-form, passed as is
 		}
 
-		var fields []string
+		var attrs []hclwrite.ObjectAttrTokens
 		var keys []string
 		for k := range schema.Properties {
 			keys = append(keys, k)
@@ -308,35 +280,44 @@ func constructValue(schema *openapi3.Schema, accessPath string, isRoot bool) str
 			}
 
 			snakeName := toSnakeCase(k)
-			childAccess := fmt.Sprintf("%s.%s", accessPath, snakeName)
-			if isRoot {
-				// For root variables, access is var.snake_name
-				childAccess = fmt.Sprintf("var.%s", snakeName)
-			}
+			var childAccess hclwrite.Tokens
+			childAccess = append(childAccess, accessPath...)
+			childAccess = append(childAccess, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
+			childAccess = append(childAccess, hclwrite.TokensForIdentifier(snakeName)...)
 
 			childValue := constructValue(prop.Value, childAccess, false)
-			fields = append(fields, fmt.Sprintf("%s = %s", k, childValue))
+			attrs = append(attrs, hclwrite.ObjectAttrTokens{
+				Name:  hclwrite.TokensForIdentifier(k),
+				Value: childValue,
+			})
 		}
 
-		objStr := fmt.Sprintf("{\n%s\n}", strings.Join(fields, "\n"))
+		objTokens := hclwrite.TokensForObject(attrs)
 
 		if !isRoot {
-			// If not root, handle null check
-			return fmt.Sprintf("%s == null ? null : %s", accessPath, objStr)
+			return hclgen.NullEqualityTernary(accessPath, objTokens)
 		}
-		return objStr
+		return objTokens
 	}
 
 	if slices.Contains(types, "array") {
 		if schema.Items != nil && schema.Items.Value != nil {
-			// [for x in accessPath : constructValue(items, x)]
-			// We need a unique iterator variable name if nested?
-			// Simple "item" might conflict if nested arrays?
-			// Let's use a simple heuristic or just "item" since HCL scoping handles it?
-			// Actually HCL `for` expressions create a new scope.
+			childValue := constructValue(schema.Items.Value, hclwrite.TokensForIdentifier("item"), false)
 
-			childValue := constructValue(schema.Items.Value, "item", false)
-			return fmt.Sprintf("%s == null ? null : [for item in %s : %s]", accessPath, accessPath, childValue)
+			var tokens hclwrite.Tokens
+			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenOBrack, Bytes: []byte("[")})
+			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("for")})
+			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("item")})
+			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("in")})
+			tokens = append(tokens, accessPath...)
+			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
+			tokens = append(tokens, childValue...)
+			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenCBrack, Bytes: []byte("]")})
+
+			if !isRoot {
+				return hclgen.NullEqualityTernary(accessPath, tokens)
+			}
+			return tokens
 		}
 		return accessPath
 	}
@@ -344,38 +325,38 @@ func constructValue(schema *openapi3.Schema, accessPath string, isRoot bool) str
 	return accessPath
 }
 
-func mapType(schema *openapi3.Schema) string {
+func mapType(schema *openapi3.Schema) hclwrite.Tokens {
 	if schema.Type == nil {
-		return "any"
+		return hclwrite.TokensForIdentifier("any")
 	}
 
 	types := *schema.Type
 
 	if slices.Contains(types, "string") {
-		return "string"
+		return hclwrite.TokensForIdentifier("string")
 	}
 	if slices.Contains(types, "integer") || slices.Contains(types, "number") {
-		return "number"
+		return hclwrite.TokensForIdentifier("number")
 	}
 	if slices.Contains(types, "boolean") {
-		return "bool"
+		return hclwrite.TokensForIdentifier("bool")
 	}
 	if slices.Contains(types, "array") {
-		elemType := "any"
+		elemType := hclwrite.TokensForIdentifier("any")
 		if schema.Items != nil && schema.Items.Value != nil {
 			elemType = mapType(schema.Items.Value)
 		}
-		return fmt.Sprintf("list(%s)", elemType)
+		return hclwrite.TokensForFunctionCall("list", elemType)
 	}
 	if slices.Contains(types, "object") {
 		if len(schema.Properties) == 0 {
 			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
 				valueType := mapType(schema.AdditionalProperties.Schema.Value)
-				return fmt.Sprintf("map(%s)", valueType)
+				return hclwrite.TokensForFunctionCall("map", valueType)
 			}
-			return "map(string)" // Fallback for free-form objects
+			return hclwrite.TokensForFunctionCall("map", hclwrite.TokensForIdentifier("string"))
 		}
-		var fields []string
+		var attrs []hclwrite.ObjectAttrTokens
 
 		// Sort properties
 		var keys []string
@@ -401,15 +382,17 @@ func mapType(schema *openapi3.Schema) string {
 			}
 
 			if isOptional {
-				fields = append(fields, fmt.Sprintf("%s = optional(%s)", toSnakeCase(k), fieldType))
-			} else {
-				fields = append(fields, fmt.Sprintf("%s = %s", toSnakeCase(k), fieldType))
+				fieldType = hclwrite.TokensForFunctionCall("optional", fieldType)
 			}
+			attrs = append(attrs, hclwrite.ObjectAttrTokens{
+				Name:  hclwrite.TokensForIdentifier(toSnakeCase(k)),
+				Value: fieldType,
+			})
 		}
-		return fmt.Sprintf("object({\n    %s\n  })", strings.Join(fields, "\n    "))
+		return hclwrite.TokensForFunctionCall("object", hclwrite.TokensForObject(attrs))
 	}
 
-	return "any"
+	return hclwrite.TokensForIdentifier("any")
 }
 
 func buildNestedDescription(schema *openapi3.Schema, indent string) string {
@@ -465,28 +448,31 @@ func toSnakeCase(input string) string {
 	runes := []rune(input)
 	for i, r := range runes {
 		if unicode.IsUpper(r) {
-			if i > 0 {
-				prev := runes[i-1]
-				if unicode.IsLower(prev) || unicode.IsDigit(prev) {
-					sb.WriteRune('_')
-				} else if unicode.IsUpper(prev) {
-					// Check if we should split here
-					// Standard rule: split if next is lower
-					if i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
-						// Exception: if the lower part is just 's' (plural acronym), don't split.
+			if i == 0 {
+				sb.WriteRune(unicode.ToLower(r))
+				continue
+			}
+			prev := runes[i-1]
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) {
+				sb.WriteRune('_')
+			}
+			if unicode.IsUpper(prev) {
+				// Check if we should split here
+				// Standard rule: split if next is lower
+				if i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+					// Exception: if the lower part is just 's' (plural acronym), don't split.
+					// Look ahead for lower case sequence
+					j := i + 1
+					for j < len(runes) && unicode.IsLower(runes[j]) {
+						j++
+					}
+					lowerLen := j - (i + 1)
 
-						// Look ahead for lower case sequence
-						j := i + 1
-						for j < len(runes) && unicode.IsLower(runes[j]) {
-							j++
-						}
-						lowerLen := j - (i + 1)
-
-						if lowerLen > 1 {
-							sb.WriteRune('_')
-						} else if lowerLen == 1 && runes[i+1] != 's' {
-							sb.WriteRune('_')
-						}
+					if lowerLen > 1 {
+						sb.WriteRune('_')
+					}
+					if lowerLen == 1 && runes[i+1] != 's' {
+						sb.WriteRune('_')
 					}
 				}
 			}
@@ -496,34 +482,66 @@ func toSnakeCase(input string) string {
 	return sb.String()
 }
 
-// SupportsTags reports whether the schema includes a writable top-level "tags" property.
+// SupportsTags reports whether the schema includes a writable "tags" property, following allOf inheritance.
 func SupportsTags(schema *openapi3.Schema) bool {
-	if schema == nil {
-		return false
-	}
-	tagsProp, ok := schema.Properties["tags"]
-	if !ok || tagsProp == nil || tagsProp.Value == nil {
-		return false
-	}
-	if tagsProp.Value.ReadOnly {
-		return false
-	}
-	return true
+	return hasWritableProperty(schema, "tags")
 }
 
-// SupportsLocation reports whether the schema includes a writable top-level "location" property.
+// SupportsLocation reports whether the schema includes a writable "location" property, following allOf inheritance.
 func SupportsLocation(schema *openapi3.Schema) bool {
-	if schema == nil {
+	return hasWritableProperty(schema, "location")
+}
+
+func hasWritableProperty(schema *openapi3.Schema, path string) bool {
+	if schema == nil || path == "" {
 		return false
 	}
-	locationProp, ok := schema.Properties["location"]
-	if !ok || locationProp == nil || locationProp.Value == nil {
+	segments := strings.Split(path, ".")
+	return hasWritablePropertyRecursive(schema, segments, make(map[*openapi3.Schema]struct{}))
+}
+
+func hasWritablePropertyRecursive(schema *openapi3.Schema, segments []string, visited map[*openapi3.Schema]struct{}) bool {
+	if schema == nil || len(segments) == 0 {
 		return false
 	}
-	if locationProp.Value.ReadOnly {
+	if _, seen := visited[schema]; seen {
 		return false
 	}
-	return true
+	visited[schema] = struct{}{}
+
+	propName := segments[0]
+	propRef, ok := schema.Properties[propName]
+	if ok && propRef != nil && propRef.Value != nil && !propRef.Value.ReadOnly {
+		if len(segments) == 1 {
+			return true
+		}
+		if hasWritablePropertyRecursive(propRef.Value, segments[1:], visited) {
+			return true
+		}
+	}
+
+	for _, ref := range schema.AllOf {
+		if ref == nil || ref.Value == nil {
+			continue
+		}
+		if hasWritablePropertyRecursive(ref.Value, segments, visited) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func cleanTypeString(typeStr string) string {
+	segments := strings.Split(typeStr, "/")
+	cleaned := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
+			continue
+		}
+		cleaned = append(cleaned, segment)
+	}
+	return strings.Join(cleaned, "/")
 }
 
 func generateMain(resourceType, apiVersion, localName string, supportsTags, supportsLocation, hasSchema bool) error {
@@ -534,38 +552,35 @@ func generateMain(resourceType, apiVersion, localName string, supportsTags, supp
 	if apiVersion == "" {
 		apiVersion = "apiVersion"
 	}
-	resourceTypeWithAPIVersion := fmt.Sprintf("%s@%s", resourceType, apiVersion)
+	resourceTypeWithAPIVersion := fmt.Sprintf("%s@%s", cleanTypeString(resourceType), apiVersion)
 
 	resourceBlock := body.AppendNewBlock("resource", []string{"azapi_resource", "this"})
 	resourceBody := resourceBlock.Body()
 	resourceBody.SetAttributeValue("type", cty.StringVal(resourceTypeWithAPIVersion))
-	if err := setExpressionAttribute(resourceBody, "name", "var.name"); err != nil {
-		return err
-	}
-	if err := setExpressionAttribute(resourceBody, "parent_id", "var.parent_id"); err != nil {
-		return err
-	}
+	resourceBody.SetAttributeRaw("name", hclgen.TokensForTraversal("var", "name"))
+	resourceBody.SetAttributeRaw("parent_id", hclgen.TokensForTraversal("var", "parent_id"))
+
 	if supportsLocation {
-		if err := setExpressionAttribute(resourceBody, "location", "var.location"); err != nil {
-			return err
-		}
+		resourceBody.SetAttributeRaw("location", hclgen.TokensForTraversal("var", "location"))
 	}
 
-	bodyExpr := "{}"
+	resourceBody.SetAttributeValue("body", cty.EmptyObjectVal)
 	if hasSchema {
-		bodyExpr = fmt.Sprintf("{\n  properties = local.%s\n}", localName)
-	}
-	if err := setExpressionAttribute(resourceBody, "body", bodyExpr); err != nil {
-		return err
+		resourceBody.SetAttributeRaw("body", hclwrite.TokensForObject(
+			[]hclwrite.ObjectAttrTokens{
+				{
+					Name:  hclwrite.TokensForIdentifier("properties"),
+					Value: hclgen.TokensForTraversal("local", localName),
+				},
+			},
+		))
 	}
 
 	if supportsTags {
-		if err := setExpressionAttribute(resourceBody, "tags", "var.tags"); err != nil {
-			return err
-		}
+		resourceBody.SetAttributeRaw("tags", hclgen.TokensForTraversal("var", "tags"))
 	}
 
-	return writeHCLFile("main.tf", file)
+	return hclgen.WriteFile("main.tf", file)
 }
 
 func generateOutputs() error {
@@ -575,16 +590,12 @@ func generateOutputs() error {
 	resourceID := body.AppendNewBlock("output", []string{"resource_id"})
 	resourceIDBody := resourceID.Body()
 	resourceIDBody.SetAttributeValue("description", cty.StringVal("The ID of the created resource."))
-	if err := setExpressionAttribute(resourceIDBody, "value", "azapi_resource.this.id"); err != nil {
-		return err
-	}
+	resourceIDBody.SetAttributeRaw("value", hclgen.TokensForTraversal("azapi_resource", "this", "id"))
 
 	name := body.AppendNewBlock("output", []string{"name"})
 	nameBody := name.Body()
 	nameBody.SetAttributeValue("description", cty.StringVal("The name of the created resource."))
-	if err := setExpressionAttribute(nameBody, "value", "azapi_resource.this.name"); err != nil {
-		return err
-	}
+	nameBody.SetAttributeRaw("value", hclgen.TokensForTraversal("azapi_resource", "this", "name"))
 
-	return writeHCLFile("outputs.tf", file)
+	return hclgen.WriteFile("outputs.tf", file)
 }

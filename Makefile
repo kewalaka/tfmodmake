@@ -5,3 +5,7 @@ build:
 .PHONY: install
 install:
 	go install ./cmd/tfmodmake
+
+.PHONY: test
+test:
+	go test -count=1 ./...

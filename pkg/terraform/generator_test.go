@@ -1,6 +1,7 @@
 package terraform
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"testing"
@@ -89,19 +90,19 @@ func TestGenerate(t *testing.T) {
 	varsBody := parseHCLBody(t, "variables.tf")
 
 	nameVar := requireBlock(t, varsBody, "variable", "name")
-	assert.Equal(t, "The name of the resource.", attributeStringValue(t, nameVar.Body.Attributes["description"]))
+	assert.Equal(t, "The name of the resource.\n", attributeStringValue(t, nameVar.Body.Attributes["description"]))
 	assert.Equal(t, "string", expressionString(t, nameVar.Body.Attributes["type"].Expr))
 
 	parentVar := requireBlock(t, varsBody, "variable", "parent_id")
-	assert.Equal(t, "The parent resource ID for this resource.", attributeStringValue(t, parentVar.Body.Attributes["description"]))
+	assert.Equal(t, "The parent resource ID for this resource.\n", attributeStringValue(t, parentVar.Body.Attributes["description"]))
 	assert.Equal(t, "string", expressionString(t, parentVar.Body.Attributes["type"].Expr))
 
 	assert.Nil(t, findBlock(varsBody, "variable", "tags"))
 
 	locationVar := requireBlock(t, varsBody, "variable", "location")
-	assert.Equal(t, "Resource location", attributeStringValue(t, locationVar.Body.Attributes["description"]))
+	require.NotNil(t, locationVar)
+	assert.Equal(t, "The location of the resource.\n", attributeStringValue(t, locationVar.Body.Attributes["description"]))
 	assert.Equal(t, "string", expressionString(t, locationVar.Body.Attributes["type"].Expr))
-	assert.Equal(t, "null", expressionString(t, locationVar.Body.Attributes["default"].Expr))
 
 	propertiesVar := requireBlock(t, varsBody, "variable", "properties")
 	desc := attributeStringValue(t, propertiesVar.Body.Attributes["description"])
@@ -337,7 +338,7 @@ func TestMapType(t *testing.T) {
 					"prop1": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
 				},
 			},
-			want: "object({\n    prop1 = optional(string)\n  })",
+			want: "object({\n  prop1 = optional(string)\n})",
 		},
 		{
 			name: "object with additionalProperties object",
@@ -356,13 +357,14 @@ func TestMapType(t *testing.T) {
 					},
 				},
 			},
-			want: "map(object({\n    max_concurrent = optional(number)\n    query_logging = string\n  }))",
+			want: "map(object({\n  max_concurrent = optional(number)\n  query_logging  = string\n}))",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mapType(tt.schema)
+			gotTokens := mapType(tt.schema)
+			got := string(gotTokens.Bytes())
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -422,10 +424,28 @@ func TestConstructValue_MapAdditionalPropertiesObject(t *testing.T) {
 		},
 	}
 
-	got := constructValue(schema, "var.kube_dns_overrides", false)
+	accessPath := hclwrite.Tokens{
+		{Type: hclsyntax.TokenIdent, Bytes: []byte("var")},
+		{Type: hclsyntax.TokenDot, Bytes: []byte(".")},
+		{Type: hclsyntax.TokenIdent, Bytes: []byte("kube_dns_overrides")},
+	}
+	tokens := constructValue(schema, accessPath, false)
 
-	expected := "var.kube_dns_overrides == null ? null : { for k, value in var.kube_dns_overrides : k => value == null ? null : {\nmaxConcurrent = value.max_concurrent\nqueryLogging = value.query_logging\n} }"
-	assert.Equal(t, expected, got)
+	f := hclwrite.NewEmptyFile()
+	f.Body().SetAttributeRaw("attr", tokens)
+	expected := `attr = var.kube_dns_overrides == null ? null : { for k, value in var.kube_dns_overrides : k => value == null ? null : {
+  maxConcurrent = value.max_concurrent
+  queryLogging  = value.query_logging
+} }
+`
+	buf := new(bytes.Buffer)
+	_, err := f.WriteTo(buf)
+	require.NoError(t, err)
+	parsed, diags := hclwrite.ParseConfig(buf.Bytes(), "test.tf", hcl.Pos{Line: 1, Column: 1})
+	require.False(t, diags.HasErrors())
+	attr := parsed.Body().GetAttribute("attr")
+	resultTokens := attr.BuildTokens(nil)
+	assert.Equal(t, expected, string(resultTokens.Bytes()))
 }
 
 func parseHCLBody(t *testing.T, path string) *hclsyntax.Body {

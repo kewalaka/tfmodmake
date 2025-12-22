@@ -87,9 +87,23 @@ func TestBuildTypeTokensMarksNonRequiredAsOptional(t *testing.T) {
 	}
 
 	content := string(tokens.Bytes())
-	if !strings.Contains(content, "subject = optional(string)") {
+	// hclwrite aligns attributes, so we need to be flexible with whitespace
+	if !strings.Contains(content, "subject") || !strings.Contains(content, "optional(string)") {
 		t.Fatalf("expected subject to be optional, got: %s", content)
 	}
+	// Check that subject is assigned optional(string)
+	lines := strings.Split(content, "\n")
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, "subject") && strings.Contains(line, "optional(string)") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected subject line to contain optional(string), got: %s", content)
+	}
+
 	if strings.Contains(content, "claims_matching_expression = optional(string)") {
 		t.Fatalf("claims_matching_expression should not be optional, got: %s", content)
 	}
