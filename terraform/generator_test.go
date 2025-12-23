@@ -197,6 +197,106 @@ func TestGenerate_QuotesNonIdentifierObjectKeysInLocals(t *testing.T) {
 	assert.Contains(t, locals, "var.auto_scaler_profile.foo_bar")
 }
 
+func TestGenerate_SkipsSecretsByFullPathNotLeafName(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"a": {
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"object"},
+								Properties: map[string]*openapi3.SchemaRef{
+									"password": {
+										Value: &openapi3.Schema{
+											Type:       &openapi3.Types{"string"},
+											Extensions: map[string]any{"x-ms-secret": true},
+										},
+									},
+								},
+							},
+						},
+						"b": {
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"object"},
+								Properties: map[string]*openapi3.SchemaRef{
+									"password": {
+										Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	localsBytes, err := os.ReadFile("locals.tf")
+	require.NoError(t, err)
+	locals := string(localsBytes)
+
+	// Only the specific secret path should be removed.
+	assert.NotContains(t, locals, "var.a.password")
+	assert.Contains(t, locals, "var.b.password")
+}
+
+func TestGenerate_MainEnablesIgnoreNullProperty(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"optionalString": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+						"optionalObj": {
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"object"},
+								Properties: map[string]*openapi3.SchemaRef{
+									"nestedOptional": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	mainBytes, err := os.ReadFile("main.tf")
+	require.NoError(t, err)
+	main := string(mainBytes)
+
+	assert.Contains(t, main, "ignore_null_property")
+}
+
 func TestGenerate_FailsOnFlattenedPropertiesNameCollision(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -225,6 +325,72 @@ func TestGenerate_FailsOnFlattenedPropertiesNameCollision(t *testing.T) {
 	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "collision")
+}
+
+func TestGenerate_DoesNotDuplicateSecretVarsFromFlattenedProperties(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	secretSchema := &openapi3.Schema{
+		Type:        &openapi3.Types{"string"},
+		Description: "A secret string",
+		Extensions: map[string]any{
+			"x-ms-secret": true,
+		},
+	}
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"daprAIConnectionString": {Value: secretSchema},
+						"writableProp":           {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+
+	countVar := func(name string) int {
+		count := 0
+		for _, b := range varsBody.Blocks {
+			if b.Type != "variable" {
+				continue
+			}
+			if len(b.Labels) == 1 && b.Labels[0] == name {
+				count++
+			}
+		}
+		return count
+	}
+
+	// The secret is already surfaced as a flattened variable; it must not be redeclared.
+	assert.Equal(t, 1, countVar("dapr_ai_connection_string"))
+
+	secretVar := requireBlock(t, varsBody, "variable", "dapr_ai_connection_string")
+	assert.Equal(t, "true", expressionString(t, secretVar.Body.Attributes["ephemeral"].Expr))
+
+	// Version tracker variable should be present exactly once.
+	assert.Equal(t, 1, countVar("dapr_ai_connection_string_version"))
+
+	mainBytes, err := os.ReadFile("main.tf")
+	require.NoError(t, err)
+	assert.Contains(t, string(mainBytes), "daprAIConnectionString")
+	assert.Contains(t, string(mainBytes), "var.dapr_ai_connection_string")
 }
 
 func TestGenerate_IncludesAdditionalPropertiesDescription(t *testing.T) {
@@ -515,15 +681,10 @@ func TestConstructValue_MapAdditionalPropertiesObject(t *testing.T) {
 		{Type: hclsyntax.TokenDot, Bytes: []byte(".")},
 		{Type: hclsyntax.TokenIdent, Bytes: []byte("kube_dns_overrides")},
 	}
-	tokens := constructValue(schema, accessPath, false, nil)
+	tokens := constructValue(schema, accessPath, false, nil, "")
 
 	f := hclwrite.NewEmptyFile()
 	f.Body().SetAttributeRaw("attr", tokens)
-	expected := `attr = var.kube_dns_overrides == null ? null : { for k, value in var.kube_dns_overrides : k => value == null ? null : {
-  maxConcurrent = value.max_concurrent
-  queryLogging  = value.query_logging
-} }
-`
 	buf := new(bytes.Buffer)
 	_, err := f.WriteTo(buf)
 	require.NoError(t, err)
@@ -531,6 +692,11 @@ func TestConstructValue_MapAdditionalPropertiesObject(t *testing.T) {
 	require.False(t, diags.HasErrors())
 	attr := parsed.Body().GetAttribute("attr")
 	resultTokens := attr.BuildTokens(nil)
+	expected := `attr = var.kube_dns_overrides == null ? null : { for k, value in var.kube_dns_overrides : k => value == null ? null : {
+  maxConcurrent = value.max_concurrent
+  queryLogging  = value.query_logging
+} }
+`
 	assert.Equal(t, expected, string(resultTokens.Bytes()))
 }
 
@@ -683,7 +849,7 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	assert.NotNil(t, connectionStringVersionVar)
 	assert.Equal(t, "number", expressionString(t, connectionStringVersionVar.Body.Attributes["type"].Expr))
 	assert.Equal(t, "null", expressionString(t, connectionStringVersionVar.Body.Attributes["default"].Expr))
-	
+
 	// Version variable should have validation
 	validationBlock := findBlock(connectionStringVersionVar.Body, "validation")
 	require.NotNil(t, validationBlock, "version variable should have validation")
@@ -696,10 +862,10 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	localsBlock := requireBlock(t, localsBody, "locals")
 	localAttr := localsBlock.Body.Attributes["resource_body"]
 	localExpr := expressionString(t, localAttr.Expr)
-	
+
 	// With flattened properties, normal field should be present at properties.normalField = var.normal_field
 	assert.Contains(t, localExpr, "normalField = var.normal_field")
-	
+
 	// Secret fields should NOT be in locals
 	assert.NotContains(t, localExpr, "connectionString")
 	assert.NotContains(t, localExpr, "apiKey")
@@ -707,16 +873,17 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	// Check main.tf
 	mainBody := parseHCLBody(t, "main.tf")
 	resourceBlock := requireBlock(t, mainBody, "resource", "azapi_resource", "this")
-	
+
 	// Should have sensitive_body attribute
 	sensitiveBodyAttr := resourceBlock.Body.Attributes["sensitive_body"]
 	require.NotNil(t, sensitiveBodyAttr, "resource should have sensitive_body attribute")
 	sensitiveBodyExpr := expressionString(t, sensitiveBodyAttr.Expr)
 	assert.Contains(t, sensitiveBodyExpr, "var.connection_string")
 	assert.Contains(t, sensitiveBodyExpr, "var.api_key")
-	assert.Contains(t, sensitiveBodyExpr, "properties.connectionString")
-	assert.Contains(t, sensitiveBodyExpr, "properties.apiKey")
-	
+	assert.Contains(t, sensitiveBodyExpr, "properties")
+	assert.Contains(t, sensitiveBodyExpr, "connectionString")
+	assert.Contains(t, sensitiveBodyExpr, "apiKey")
+
 	// Should have sensitive_body_version attribute
 	sensitiveBodyVersionAttr := resourceBlock.Body.Attributes["sensitive_body_version"]
 	require.NotNil(t, sensitiveBodyVersionAttr, "resource should have sensitive_body_version attribute")

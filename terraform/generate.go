@@ -1,0 +1,34 @@
+// Package terraform provides functions to generate Terraform variable and local definitions from OpenAPI schemas.
+package terraform
+
+import "github.com/getkin/kin-openapi/openapi3"
+
+// Generate generates variables.tf, locals.tf, main.tf, and outputs.tf based on the schema.
+func Generate(schema *openapi3.Schema, resourceType string, localName string, apiVersion string, supportsTags bool, supportsLocation bool) error {
+	hasSchema := schema != nil
+
+	// Collect secret fields from schema
+	var secrets []secretField
+	if hasSchema {
+		secrets = collectSecretFields(schema, "")
+	}
+
+	if err := generateTerraform(); err != nil {
+		return err
+	}
+	if err := generateVariables(schema, supportsTags, supportsLocation, secrets); err != nil {
+		return err
+	}
+	if hasSchema {
+		if err := generateLocals(schema, localName, secrets); err != nil {
+			return err
+		}
+	}
+	if err := generateMain(schema, resourceType, apiVersion, localName, supportsTags, supportsLocation, hasSchema, secrets); err != nil {
+		return err
+	}
+	if err := generateOutputs(); err != nil {
+		return err
+	}
+	return nil
+}
