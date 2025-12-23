@@ -891,3 +891,383 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.connection_string_version")
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.api_key_version")
 }
+
+func TestGenerate_ArrayMinItemsValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minItems := uint64(2)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"itemList": {
+							Value: &openapi3.Schema{
+								Type:     &openapi3.Types{"array"},
+								MinItems: minItems,
+								Items: &openapi3.SchemaRef{
+									Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	itemListVar := requireBlock(t, varsBody, "variable", "item_list")
+
+	// Should have validation block for minItems
+	validationBlock := findBlock(itemListVar.Body, "validation")
+	require.NotNil(t, validationBlock, "variable should have validation for minItems")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.item_list == null")
+	assert.Contains(t, conditionExpr, "length(var.item_list) >= 2")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "item_list must have at least 2 items.", errorMsg)
+}
+
+func TestGenerate_ArrayMaxItemsValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	maxItems := uint64(10)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"itemList": {
+							Value: &openapi3.Schema{
+								Type:     &openapi3.Types{"array"},
+								MaxItems: &maxItems,
+								Items: &openapi3.SchemaRef{
+									Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	itemListVar := requireBlock(t, varsBody, "variable", "item_list")
+
+	// Should have validation block for maxItems
+	validationBlock := findBlock(itemListVar.Body, "validation")
+	require.NotNil(t, validationBlock, "variable should have validation for maxItems")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.item_list == null")
+	assert.Contains(t, conditionExpr, "length(var.item_list) <= 10")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "item_list must have at most 10 items.", errorMsg)
+}
+
+func TestGenerate_ArrayMinAndMaxItemsValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minItems := uint64(1)
+	maxItems := uint64(5)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"itemList": {
+							Value: &openapi3.Schema{
+								Type:     &openapi3.Types{"array"},
+								MinItems: minItems,
+								MaxItems: &maxItems,
+								Items: &openapi3.SchemaRef{
+									Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	itemListVar := requireBlock(t, varsBody, "variable", "item_list")
+
+	// Count validation blocks - should have 2 (minItems and maxItems)
+	validationCount := 0
+	for _, block := range itemListVar.Body.Blocks {
+		if block.Type == "validation" {
+			validationCount++
+		}
+	}
+	assert.Equal(t, 2, validationCount, "should have 2 validation blocks (minItems and maxItems)")
+}
+
+func TestGenerate_ArrayUniqueItemsValidationForList(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"uniqueList": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"array"},
+								UniqueItems: true,
+								Items: &openapi3.SchemaRef{
+									Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	uniqueListVar := requireBlock(t, varsBody, "variable", "unique_list")
+
+	// Should have validation block for uniqueItems
+	validationBlock := findBlock(uniqueListVar.Body, "validation")
+	require.NotNil(t, validationBlock, "variable should have validation for uniqueItems")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.unique_list == null")
+	assert.Contains(t, conditionExpr, "length(distinct(var.unique_list)) == length(var.unique_list)")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "unique_list must contain unique items.", errorMsg)
+}
+
+func TestGenerate_ArrayAllConstraintsValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minItems := uint64(1)
+	maxItems := uint64(10)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"constrainedList": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"array"},
+								MinItems:    minItems,
+								MaxItems:    &maxItems,
+								UniqueItems: true,
+								Items: &openapi3.SchemaRef{
+									Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	constrainedListVar := requireBlock(t, varsBody, "variable", "constrained_list")
+
+	// Count validation blocks - should have 3 (minItems, maxItems, uniqueItems)
+	validationCount := 0
+	for _, block := range constrainedListVar.Body.Blocks {
+		if block.Type == "validation" {
+			validationCount++
+		}
+	}
+	assert.Equal(t, 3, validationCount, "should have 3 validation blocks (minItems, maxItems, uniqueItems)")
+}
+
+func TestGenerate_ArrayRequiredFieldValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minItems := uint64(1)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type:     &openapi3.Types{"object"},
+					Required: []string{"requiredList"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"requiredList": {
+							Value: &openapi3.Schema{
+								Type:     &openapi3.Types{"array"},
+								MinItems: minItems,
+								Items: &openapi3.SchemaRef{
+									Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	requiredListVar := requireBlock(t, varsBody, "variable", "required_list")
+
+	// Should not have default attribute since it's required
+	assert.Nil(t, requiredListVar.Body.Attributes["default"])
+
+	// Should have validation block for minItems
+	validationBlock := findBlock(requiredListVar.Body, "validation")
+	require.NotNil(t, validationBlock, "variable should have validation for minItems")
+
+	// For required fields, should not include null check
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.NotContains(t, conditionExpr, "== null")
+	assert.Contains(t, conditionExpr, "length(var.required_list) >= 1")
+}
+
+func TestGenerate_ArraySingularItemInErrorMessage(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minItems := uint64(1)
+	maxItems := uint64(1)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"singleItem": {
+							Value: &openapi3.Schema{
+								Type:     &openapi3.Types{"array"},
+								MinItems: minItems,
+								MaxItems: &maxItems,
+								Items: &openapi3.SchemaRef{
+									Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	singleItemVar := requireBlock(t, varsBody, "variable", "single_item")
+
+	// Find minItems validation
+	var minItemsValidation *hclsyntax.Block
+	for _, block := range singleItemVar.Body.Blocks {
+		if block.Type == "validation" {
+			errorMsg := attributeStringValue(t, block.Body.Attributes["error_message"])
+			if strings.Contains(errorMsg, "at least") {
+				minItemsValidation = block
+				break
+			}
+		}
+	}
+	require.NotNil(t, minItemsValidation)
+	errorMsg := attributeStringValue(t, minItemsValidation.Body.Attributes["error_message"])
+	assert.Equal(t, "single_item must have at least 1 item.", errorMsg)
+
+	// Find maxItems validation
+	var maxItemsValidation *hclsyntax.Block
+	for _, block := range singleItemVar.Body.Blocks {
+		if block.Type == "validation" {
+			errorMsg := attributeStringValue(t, block.Body.Attributes["error_message"])
+			if strings.Contains(errorMsg, "at most") {
+				maxItemsValidation = block
+				break
+			}
+		}
+	}
+	require.NotNil(t, maxItemsValidation)
+	errorMsg = attributeStringValue(t, maxItemsValidation.Body.Attributes["error_message"])
+	assert.Equal(t, "single_item must have at most 1 item.", errorMsg)
+}

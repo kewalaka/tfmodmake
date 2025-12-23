@@ -124,6 +124,109 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValuesRaw, ", "))))
 		}
 
+		// Generate array constraint validations (minItems, maxItems, uniqueItems)
+		if propSchema.Type != nil && slices.Contains(*propSchema.Type, "array") {
+			varRef := hclgen.TokensForTraversal("var", tfName)
+
+			// minItems validation
+			if propSchema.MinItems > 0 {
+				lengthCall := hclwrite.TokensForFunctionCall("length", varRef)
+				
+				var condition hclwrite.Tokens
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				
+				if !isRequired {
+					condition = append(condition, varRef...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+					condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" ||")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				}
+				
+				condition = append(condition, lengthCall...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenGreaterThanEq, Bytes: []byte(" >= ")})
+				condition = append(condition, hclwrite.TokensForValue(cty.NumberIntVal(int64(propSchema.MinItems)))...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+
+				validation := varBody.AppendNewBlock("validation", nil)
+				validationBody := validation.Body()
+				validationBody.SetAttributeRaw("condition", condition)
+				
+				itemWord := "items"
+				if propSchema.MinItems == 1 {
+					itemWord = "item"
+				}
+				validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must have at least %d %s.", tfName, propSchema.MinItems, itemWord)))
+			}
+
+			// maxItems validation
+			if propSchema.MaxItems != nil {
+				lengthCall := hclwrite.TokensForFunctionCall("length", varRef)
+				
+				var condition hclwrite.Tokens
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				
+				if !isRequired {
+					condition = append(condition, varRef...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+					condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" ||")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				}
+				
+				condition = append(condition, lengthCall...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenLessThanEq, Bytes: []byte(" <= ")})
+				condition = append(condition, hclwrite.TokensForValue(cty.NumberIntVal(int64(*propSchema.MaxItems)))...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+
+				validation := varBody.AppendNewBlock("validation", nil)
+				validationBody := validation.Body()
+				validationBody.SetAttributeRaw("condition", condition)
+				
+				itemWord := "items"
+				if *propSchema.MaxItems == 1 {
+					itemWord = "item"
+				}
+				validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must have at most %d %s.", tfName, *propSchema.MaxItems, itemWord)))
+			}
+
+			// uniqueItems validation (only for lists, not sets)
+			// Check if this is a list type by examining the mapped type
+			isListType := string(tfType.Bytes())[:4] == "list"
+			if propSchema.UniqueItems && isListType {
+				lengthCall := hclwrite.TokensForFunctionCall("length", varRef)
+				distinctCall := hclwrite.TokensForFunctionCall("distinct", varRef)
+				lengthDistinctCall := hclwrite.TokensForFunctionCall("length", distinctCall)
+				
+				var condition hclwrite.Tokens
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				
+				if !isRequired {
+					condition = append(condition, varRef...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+					condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" ||")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				}
+				
+				condition = append(condition, lengthDistinctCall...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+				condition = append(condition, lengthCall...)
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+				condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+
+				validation := varBody.AppendNewBlock("validation", nil)
+				validationBody := validation.Body()
+				validationBody.SetAttributeRaw("condition", condition)
+				validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must contain unique items.", tfName)))
+			}
+		}
+
 		return varBody, nil
 	}
 
