@@ -197,6 +197,64 @@ func TestGenerate_QuotesNonIdentifierObjectKeysInLocals(t *testing.T) {
 	assert.Contains(t, locals, "var.auto_scaler_profile.foo_bar")
 }
 
+func TestGenerate_SkipsSecretsByFullPathNotLeafName(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"a": {
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"object"},
+								Properties: map[string]*openapi3.SchemaRef{
+									"password": {
+										Value: &openapi3.Schema{
+											Type:       &openapi3.Types{"string"},
+											Extensions: map[string]any{"x-ms-secret": true},
+										},
+									},
+								},
+							},
+						},
+						"b": {
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"object"},
+								Properties: map[string]*openapi3.SchemaRef{
+									"password": {
+										Value: &openapi3.Schema{Type: &openapi3.Types{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	localsBytes, err := os.ReadFile("locals.tf")
+	require.NoError(t, err)
+	locals := string(localsBytes)
+
+	// Only the specific secret path should be removed.
+	assert.NotContains(t, locals, "var.a.password")
+	assert.Contains(t, locals, "var.b.password")
+}
+
 func TestGenerate_MainEnablesIgnoreNullProperty(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -623,7 +681,7 @@ func TestConstructValue_MapAdditionalPropertiesObject(t *testing.T) {
 		{Type: hclsyntax.TokenDot, Bytes: []byte(".")},
 		{Type: hclsyntax.TokenIdent, Bytes: []byte("kube_dns_overrides")},
 	}
-	tokens := constructValue(schema, accessPath, false, nil)
+	tokens := constructValue(schema, accessPath, false, nil, "")
 
 	f := hclwrite.NewEmptyFile()
 	f.Body().SetAttributeRaw("attr", tokens)
