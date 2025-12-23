@@ -891,3 +891,302 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.connection_string_version")
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.api_key_version")
 }
+
+func TestExtractEnumValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema *openapi3.Schema
+		want   []string
+	}{
+		{
+			name:   "nil schema",
+			schema: nil,
+			want:   nil,
+		},
+		{
+			name: "no enum",
+			schema: &openapi3.Schema{
+				Type: &openapi3.Types{"string"},
+			},
+			want: nil,
+		},
+		{
+			name: "direct enum array",
+			schema: &openapi3.Schema{
+				Type: &openapi3.Types{"string"},
+				Enum: []any{"TCP", "UDP"},
+			},
+			want: []string{"TCP", "UDP"},
+		},
+		{
+			name: "x-ms-enum with values",
+			schema: &openapi3.Schema{
+				Type: &openapi3.Types{"string"},
+				Extensions: map[string]any{
+					"x-ms-enum": map[string]any{
+						"name":          "Protocol",
+						"modelAsString": true,
+						"values": []any{
+							map[string]any{"value": "TCP", "description": "TCP protocol"},
+							map[string]any{"value": "UDP", "description": "UDP protocol"},
+						},
+					},
+				},
+			},
+			want: []string{"TCP", "UDP"},
+		},
+		{
+			name: "both enum and x-ms-enum (should merge and deduplicate)",
+			schema: &openapi3.Schema{
+				Type: &openapi3.Types{"string"},
+				Enum: []any{"TCP", "UDP"},
+				Extensions: map[string]any{
+					"x-ms-enum": map[string]any{
+						"name": "Protocol",
+						"values": []any{
+							map[string]any{"value": "TCP"},
+							map[string]any{"value": "SCTP"},
+						},
+					},
+				},
+			},
+			want: []string{"SCTP", "TCP", "UDP"}, // sorted and deduplicated
+		},
+		{
+			name: "enum via allOf",
+			schema: &openapi3.Schema{
+				AllOf: []*openapi3.SchemaRef{
+					{
+						Value: &openapi3.Schema{
+							Type: &openapi3.Types{"string"},
+							Enum: []any{"System", "User"},
+						},
+					},
+				},
+			},
+			want: []string{"System", "User"},
+		},
+		{
+			name: "enum via nested allOf",
+			schema: &openapi3.Schema{
+				AllOf: []*openapi3.SchemaRef{
+					{
+						Value: &openapi3.Schema{
+							AllOf: []*openapi3.SchemaRef{
+								{
+									Value: &openapi3.Schema{
+										Type: &openapi3.Types{"string"},
+										Enum: []any{"VirtualMachineScaleSets", "AvailabilitySet"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"AvailabilitySet", "VirtualMachineScaleSets"},
+		},
+		{
+			name: "multiple allOf with enums (should merge)",
+			schema: &openapi3.Schema{
+				AllOf: []*openapi3.SchemaRef{
+					{
+						Value: &openapi3.Schema{
+							Type: &openapi3.Types{"string"},
+							Enum: []any{"A", "B"},
+						},
+					},
+					{
+						Value: &openapi3.Schema{
+							Type: &openapi3.Types{"string"},
+							Enum: []any{"B", "C"},
+						},
+					},
+				},
+			},
+			want: []string{"A", "B", "C"}, // sorted and deduplicated
+		},
+		{
+			name: "complex: direct enum + x-ms-enum + allOf",
+			schema: &openapi3.Schema{
+				Type: &openapi3.Types{"string"},
+				Enum: []any{"Direct"},
+				Extensions: map[string]any{
+					"x-ms-enum": map[string]any{
+						"values": []any{
+							map[string]any{"value": "Extension"},
+						},
+					},
+				},
+				AllOf: []*openapi3.SchemaRef{
+					{
+						Value: &openapi3.Schema{
+							Type: &openapi3.Types{"string"},
+							Enum: []any{"AllOf"},
+						},
+					},
+				},
+			},
+			want: []string{"AllOf", "Direct", "Extension"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractEnumValues(tt.schema)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGenerate_WithEnumValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Schema with enum properties
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"protocol": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The network protocol",
+								Enum:        []any{"TCP", "UDP"},
+							},
+						},
+						"agentPoolType": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The agent pool type",
+								Extensions: map[string]any{
+									"x-ms-enum": map[string]any{
+										"name": "AgentPoolType",
+										"values": []any{
+											map[string]any{"value": "VirtualMachineScaleSets"},
+											map[string]any{"value": "AvailabilitySet"},
+										},
+									},
+								},
+							},
+						},
+					},
+					Required: []string{"protocol"},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	// Check variables.tf
+	varsBody := parseHCLBody(t, "variables.tf")
+
+	// Check protocol variable (required enum)
+	protocolVar := requireBlock(t, varsBody, "variable", "protocol")
+	assert.NotNil(t, protocolVar)
+
+	// Should have validation block
+	validationBlock := findBlock(protocolVar.Body, "validation")
+	require.NotNil(t, validationBlock, "protocol should have validation block")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	// Required enum should not have null check
+	assert.Contains(t, conditionExpr, "contains")
+	assert.NotContains(t, conditionExpr, "== null")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "protocol must be one of:")
+	assert.Contains(t, errorMsg, "TCP")
+	assert.Contains(t, errorMsg, "UDP")
+
+	// Check agentPoolType variable (optional x-ms-enum)
+	agentPoolTypeVar := requireBlock(t, varsBody, "variable", "agent_pool_type")
+	assert.NotNil(t, agentPoolTypeVar)
+
+	// Should have default = null
+	assert.Equal(t, "null", expressionString(t, agentPoolTypeVar.Body.Attributes["default"].Expr))
+
+	// Should have validation block with null check
+	validation := findBlock(agentPoolTypeVar.Body, "validation")
+	require.NotNil(t, validation, "agent_pool_type should have validation block")
+
+	condition := expressionString(t, validation.Body.Attributes["condition"].Expr)
+	// Optional enum should have null-safe short-circuit
+	assert.Contains(t, condition, "var.agent_pool_type == null")
+	assert.Contains(t, condition, "||")
+	assert.Contains(t, condition, "contains")
+
+	errMsg := attributeStringValue(t, validation.Body.Attributes["error_message"])
+	assert.Contains(t, errMsg, "agent_pool_type must be one of:")
+	assert.Contains(t, errMsg, "AvailabilitySet")
+	assert.Contains(t, errMsg, "VirtualMachineScaleSets")
+}
+
+func TestGenerate_WithAllOfEnumValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Schema with enum via allOf
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"mode": {
+							Value: &openapi3.Schema{
+								AllOf: []*openapi3.SchemaRef{
+									{
+										Value: &openapi3.Schema{
+											Type:        &openapi3.Types{"string"},
+											Description: "Agent pool mode",
+											Enum:        []any{"System", "User", "Gateway"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	// Check variables.tf
+	varsBody := parseHCLBody(t, "variables.tf")
+
+	// Check mode variable
+	modeVar := requireBlock(t, varsBody, "variable", "mode")
+	assert.NotNil(t, modeVar)
+
+	// Should have validation block
+	validationBlock := findBlock(modeVar.Body, "validation")
+	require.NotNil(t, validationBlock, "mode should have validation block from allOf enum")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "mode must be one of:")
+	assert.Contains(t, errorMsg, "Gateway")
+	assert.Contains(t, errorMsg, "System")
+	assert.Contains(t, errorMsg, "User")
+}

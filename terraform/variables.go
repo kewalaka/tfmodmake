@@ -1,6 +1,7 @@
 package terraform
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -12,6 +13,84 @@ import (
 	"github.com/matt-FFFFFF/tfmodmake/internal/hclgen"
 	"github.com/zclconf/go-cty/cty"
 )
+
+// extractEnumValues extracts enum values from a schema, handling:
+// - Direct enum arrays
+// - x-ms-enum extensions
+// - Schemas referenced via $ref (already resolved by kin-openapi)
+// - Schemas composed via allOf
+//
+// Returns a slice of string values in stable order (sorted).
+func extractEnumValues(schema *openapi3.Schema) []string {
+	if schema == nil {
+		return nil
+	}
+
+	var enumValues []string
+	seen := make(map[string]struct{})
+
+	// Helper to add unique enum values
+	addEnum := func(val string) {
+		if _, exists := seen[val]; !exists {
+			enumValues = append(enumValues, val)
+			seen[val] = struct{}{}
+		}
+	}
+
+	// 1. Check for direct enum array
+	if len(schema.Enum) > 0 {
+		for _, v := range schema.Enum {
+			addEnum(fmt.Sprintf("%v", v))
+		}
+	}
+
+	// 2. Check for x-ms-enum extension
+	// x-ms-enum can provide additional metadata like descriptions
+	// Format: { "name": "EnumName", "modelAsString": true, "values": [{"value": "A"}, {"value": "B"}] }
+	if schema.Extensions != nil {
+		if raw, ok := schema.Extensions["x-ms-enum"]; ok {
+			var xmsEnum map[string]any
+			switch v := raw.(type) {
+			case json.RawMessage:
+				if err := json.Unmarshal(v, &xmsEnum); err == nil {
+					if values, ok := xmsEnum["values"].([]any); ok {
+						for _, item := range values {
+							if itemMap, ok := item.(map[string]any); ok {
+								if val, ok := itemMap["value"].(string); ok {
+									addEnum(val)
+								}
+							}
+						}
+					}
+				}
+			case map[string]any:
+				if values, ok := v["values"].([]any); ok {
+					for _, item := range values {
+						if itemMap, ok := item.(map[string]any); ok {
+							if val, ok := itemMap["value"].(string); ok {
+								addEnum(val)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Check allOf schemas (schema composition)
+	for _, allOfRef := range schema.AllOf {
+		if allOfRef != nil && allOfRef.Value != nil {
+			childEnums := extractEnumValues(allOfRef.Value)
+			for _, val := range childEnums {
+				addEnum(val)
+			}
+		}
+	}
+
+	// Sort for stable output
+	sort.Strings(enumValues)
+	return enumValues
+}
 
 func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool, secrets []secretField) error {
 	file := hclwrite.NewEmptyFile()
@@ -95,12 +174,12 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			varBody.SetAttributeValue("ephemeral", cty.True)
 		}
 
-		if len(propSchema.Enum) > 0 {
-			var enumValuesRaw []string
+		// Generate enum validation using the new helper function
+		enumValues := extractEnumValues(propSchema)
+		if len(enumValues) > 0 {
 			var enumTokens []hclwrite.Tokens
-			for _, v := range propSchema.Enum {
-				enumValuesRaw = append(enumValuesRaw, fmt.Sprintf("%v", v))
-				enumTokens = append(enumTokens, hclwrite.TokensForValue(cty.StringVal(fmt.Sprintf("%v", v))))
+			for _, val := range enumValues {
+				enumTokens = append(enumTokens, hclwrite.TokensForValue(cty.StringVal(val)))
 			}
 
 			varRef := hclgen.TokensForTraversal("var", tfName)
@@ -121,7 +200,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			validation := varBody.AppendNewBlock("validation", nil)
 			validationBody := validation.Body()
 			validationBody.SetAttributeRaw("condition", condition)
-			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValuesRaw, ", "))))
+			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValues, ", "))))
 		}
 
 		return varBody, nil
