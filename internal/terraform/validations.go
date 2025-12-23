@@ -258,8 +258,10 @@ func generateStringValidations(varBody *hclwrite.Body, tfName string, schema *op
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
 			condition = append(condition, hclwrite.TokensForIdentifier("null")...)
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" || ")})
+			condition = append(condition, lengthCall...)
+		} else {
+			condition = append(condition, lengthCall...)
 		}
-		condition = append(condition, lengthCall...)
 		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenGreaterThanEq, Bytes: []byte(" >= ")})
 		condition = append(condition, hclwrite.TokensForValue(cty.NumberIntVal(int64(schema.MinLength)))...)
 
@@ -282,8 +284,10 @@ func generateStringValidations(varBody *hclwrite.Body, tfName string, schema *op
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
 			condition = append(condition, hclwrite.TokensForIdentifier("null")...)
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" || ")})
+			condition = append(condition, lengthCall...)
+		} else {
+			condition = append(condition, lengthCall...)
 		}
-		condition = append(condition, lengthCall...)
 		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenLessThanEq, Bytes: []byte(" <= ")})
 		condition = append(condition, hclwrite.TokensForValue(cty.NumberUIntVal(*schema.MaxLength))...)
 
@@ -351,8 +355,10 @@ func generateArrayValidations(varBody *hclwrite.Body, tfName string, schema *ope
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
 			condition = append(condition, hclwrite.TokensForIdentifier("null")...)
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" || ")})
+			condition = append(condition, lengthCall...)
+		} else {
+			condition = append(condition, lengthCall...)
 		}
-		condition = append(condition, lengthCall...)
 		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenGreaterThanEq, Bytes: []byte(" >= ")})
 		condition = append(condition, hclwrite.TokensForValue(cty.NumberUIntVal(schema.MinItems))...)
 
@@ -375,8 +381,10 @@ func generateArrayValidations(varBody *hclwrite.Body, tfName string, schema *ope
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
 			condition = append(condition, hclwrite.TokensForIdentifier("null")...)
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" || ")})
+			condition = append(condition, lengthCall...)
+		} else {
+			condition = append(condition, lengthCall...)
 		}
-		condition = append(condition, lengthCall...)
 		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenLessThanEq, Bytes: []byte(" <= ")})
 		condition = append(condition, hclwrite.TokensForValue(cty.NumberUIntVal(*schema.MaxItems))...)
 
@@ -404,8 +412,10 @@ func generateArrayValidations(varBody *hclwrite.Body, tfName string, schema *ope
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
 			condition = append(condition, hclwrite.TokensForIdentifier("null")...)
 			condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" || ")})
+			condition = append(condition, lengthDistinctCall...)
+		} else {
+			condition = append(condition, lengthDistinctCall...)
 		}
-		condition = append(condition, lengthDistinctCall...)
 		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
 		condition = append(condition, lengthCall...)
 
