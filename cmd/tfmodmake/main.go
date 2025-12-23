@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/matt-FFFFFF/tfmodmake/pkg/openapi"
-	"github.com/matt-FFFFFF/tfmodmake/pkg/submodule"
-	"github.com/matt-FFFFFF/tfmodmake/pkg/terraform"
+	"github.com/matt-FFFFFF/tfmodmake/openapi"
+	"github.com/matt-FFFFFF/tfmodmake/submodule"
+	"github.com/matt-FFFFFF/tfmodmake/terraform"
 )
 
 var (
