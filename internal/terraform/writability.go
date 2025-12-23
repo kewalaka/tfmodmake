@@ -60,16 +60,6 @@ func isWritableProperty(schema *openapi3.Schema) bool {
 	return true
 }
 
-// SupportsTags reports whether the schema includes a writable "tags" property, following allOf inheritance.
-func SupportsTags(schema *openapi3.Schema) bool {
-	return hasWritableProperty(schema, "tags")
-}
-
-// SupportsLocation reports whether the schema includes a writable "location" property, following allOf inheritance.
-func SupportsLocation(schema *openapi3.Schema) bool {
-	return hasWritableProperty(schema, "location")
-}
-
 func hasWritableProperty(schema *openapi3.Schema, path string) bool {
 	if schema == nil || path == "" {
 		return false

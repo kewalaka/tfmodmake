@@ -10,23 +10,6 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-func generateTerraform() error {
-	file := hclwrite.NewEmptyFile()
-	body := file.Body()
-
-	tfBlock := body.AppendNewBlock("terraform", nil)
-	tfBody := tfBlock.Body()
-	tfBody.SetAttributeValue("required_version", cty.StringVal("~> 1.12"))
-
-	providers := tfBody.AppendNewBlock("required_providers", nil)
-	providers.Body().SetAttributeValue("azapi", cty.ObjectVal(map[string]cty.Value{
-		"source":  cty.StringVal("azure/azapi"),
-		"version": cty.StringVal("~> 2.7"),
-	}))
-
-	return hclgen.WriteFile("terraform.tf", file)
-}
-
 func cleanTypeString(typeStr string) string {
 	segments := strings.Split(typeStr, "/")
 	cleaned := make([]string, 0, len(segments))
@@ -104,21 +87,4 @@ func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName s
 	resourceBody.SetAttributeValue("response_export_values", cty.ListValEmpty(cty.String))
 
 	return hclgen.WriteFile("main.tf", file)
-}
-
-func generateOutputs() error {
-	file := hclwrite.NewEmptyFile()
-	body := file.Body()
-
-	resourceID := body.AppendNewBlock("output", []string{"resource_id"})
-	resourceIDBody := resourceID.Body()
-	resourceIDBody.SetAttributeValue("description", cty.StringVal("The ID of the created resource."))
-	resourceIDBody.SetAttributeRaw("value", hclgen.TokensForTraversal("azapi_resource", "this", "id"))
-
-	name := body.AppendNewBlock("output", []string{"name"})
-	nameBody := name.Body()
-	nameBody.SetAttributeValue("description", cty.StringVal("The name of the created resource."))
-	nameBody.SetAttributeRaw("value", hclgen.TokensForTraversal("azapi_resource", "this", "name"))
-
-	return hclgen.WriteFile("outputs.tf", file)
 }

@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/matt-FFFFFF/tfmodmake/openapi"
-	"github.com/matt-FFFFFF/tfmodmake/submodule"
-	"github.com/matt-FFFFFF/tfmodmake/terraform"
 	"github.com/matt-FFFFFF/tfmodmake/internal/naming"
+	"github.com/matt-FFFFFF/tfmodmake/internal/openapi"
+	"github.com/matt-FFFFFF/tfmodmake/internal/submodule"
+	"github.com/matt-FFFFFF/tfmodmake/internal/terraform"
 )
 
 func main() {

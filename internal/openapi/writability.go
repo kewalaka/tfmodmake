@@ -19,10 +19,10 @@ const tfmodmakeSchemaRefKey = "x-tfmodmake-schema-ref"
 //
 // Example (as found in some Azure specs):
 //
-//   "powerState": {
-//     "$ref": "#/definitions/PowerState",
-//     "readOnly": true
-//   }
+//	"powerState": {
+//	  "$ref": "#/definitions/PowerState",
+//	  "readOnly": true
+//	}
 //
 // JSON Schema/OpenAPI treat $ref as a full replacement, so parsers commonly
 // discard sibling fields like readOnly. If we only look at the resolved schema

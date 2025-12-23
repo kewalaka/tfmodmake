@@ -32,3 +32,13 @@ func Generate(schema *openapi3.Schema, resourceType string, localName string, ap
 	}
 	return nil
 }
+
+// SupportsTags reports whether the schema includes a writable "tags" property, following allOf inheritance.
+func SupportsTags(schema *openapi3.Schema) bool {
+	return hasWritableProperty(schema, "tags")
+}
+
+// SupportsLocation reports whether the schema includes a writable "location" property, following allOf inheritance.
+func SupportsLocation(schema *openapi3.Schema) bool {
+	return hasWritableProperty(schema, "location")
+}

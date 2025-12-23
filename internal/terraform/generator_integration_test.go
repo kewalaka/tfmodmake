@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matt-FFFFFF/tfmodmake/openapi"
+	"github.com/matt-FFFFFF/tfmodmake/internal/openapi"
 )
 
 func TestSupportsLocation_ManagedIdentityUserAssigned(t *testing.T) {
