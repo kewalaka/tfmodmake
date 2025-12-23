@@ -891,3 +891,361 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.connection_string_version")
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.api_key_version")
 }
+
+func TestGenerate_WithNumericConstraints_MinMax(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 1.0
+	max := 10.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"count": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "Number of instances",
+								Min:         &min,
+								Max:         &max,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	countVar := requireBlock(t, varsBody, "variable", "count")
+	assert.Equal(t, "number", expressionString(t, countVar.Body.Attributes["type"].Expr))
+	assert.Equal(t, "null", expressionString(t, countVar.Body.Attributes["default"].Expr))
+
+	// Find validation block
+	validationBlock := findBlock(countVar.Body, "validation")
+	require.NotNil(t, validationBlock, "count variable should have validation")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	// Should be null-safe with both min and max checks
+	assert.Contains(t, conditionExpr, "var.count == null")
+	assert.Contains(t, conditionExpr, "var.count >= 1")
+	assert.Contains(t, conditionExpr, "var.count <= 10")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "count must be")
+	assert.Contains(t, errorMsg, ">= 1")
+	assert.Contains(t, errorMsg, "<= 10")
+}
+
+func TestGenerate_WithNumericConstraints_ExclusiveMinMax(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 0.0
+	max := 100.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"percentage": {
+							Value: &openapi3.Schema{
+								Type:         &openapi3.Types{"number"},
+								Description:  "Percentage value",
+								Min:          &min,
+								Max:          &max,
+								ExclusiveMin: true,
+								ExclusiveMax: true,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	percentageVar := requireBlock(t, varsBody, "variable", "percentage")
+
+	validationBlock := findBlock(percentageVar.Body, "validation")
+	require.NotNil(t, validationBlock, "percentage variable should have validation")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	// Should use > and < instead of >= and <=
+	assert.Contains(t, conditionExpr, "var.percentage > 0")
+	assert.Contains(t, conditionExpr, "var.percentage < 100")
+	assert.NotContains(t, conditionExpr, ">=")
+	assert.NotContains(t, conditionExpr, "<=")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "> 0")
+	assert.Contains(t, errorMsg, "< 100")
+}
+
+func TestGenerate_WithNumericConstraints_MultipleOf(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 0.0
+	max := 1000.0
+	multipleOf := 5.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"increment": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "Increment value",
+								Min:         &min,
+								Max:         &max,
+								MultipleOf:  &multipleOf,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	incrementVar := requireBlock(t, varsBody, "variable", "increment")
+
+	validationBlock := findBlock(incrementVar.Body, "validation")
+	require.NotNil(t, validationBlock, "increment variable should have validation")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	// Should include multipleOf check: var.increment % 5 == 0
+	assert.Contains(t, conditionExpr, "var.increment >= 0")
+	assert.Contains(t, conditionExpr, "var.increment <= 1000")
+	assert.Contains(t, conditionExpr, "var.increment % 5 == 0")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "multiple of 5")
+}
+
+func TestGenerate_WithNumericConstraints_RequiredField(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 1.0
+	max := 100.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type:     &openapi3.Types{"object"},
+					Required: []string{"requiredCount"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"requiredCount": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "Required count",
+								Min:         &min,
+								Max:         &max,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	requiredCountVar := requireBlock(t, varsBody, "variable", "required_count")
+
+	// Required field should not have default
+	assert.Nil(t, requiredCountVar.Body.Attributes["default"])
+
+	validationBlock := findBlock(requiredCountVar.Body, "validation")
+	require.NotNil(t, validationBlock, "required_count variable should have validation")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	// Required field should NOT have null check
+	assert.NotContains(t, conditionExpr, "== null")
+	assert.Contains(t, conditionExpr, "var.required_count >= 1")
+	assert.Contains(t, conditionExpr, "var.required_count <= 100")
+}
+
+func TestGenerate_WithNumericConstraints_OnlyMinimum(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 0.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"positiveValue": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"number"},
+								Description: "A positive value",
+								Min:         &min,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	positiveValueVar := requireBlock(t, varsBody, "variable", "positive_value")
+
+	validationBlock := findBlock(positiveValueVar.Body, "validation")
+	require.NotNil(t, validationBlock, "positive_value variable should have validation")
+
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.positive_value >= 0")
+	assert.NotContains(t, conditionExpr, "<=")
+
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, ">= 0")
+	assert.NotContains(t, errorMsg, "<=")
+}
+
+func TestGenerate_WithNumericConstraints_SkipsReadOnlyFields(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 1.0
+	max := 10.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"readOnlyCount": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "Read-only count",
+								ReadOnly:    true,
+								Min:         &min,
+								Max:         &max,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	// ReadOnly field should not generate a variable at all
+	readOnlyCountVar := findBlock(varsBody, "variable", "read_only_count")
+	assert.Nil(t, readOnlyCountVar, "read-only fields should not generate variables")
+}
+
+func TestGenerate_WithNumericConstraints_NoConstraints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"anyNumber": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"number"},
+								Description: "Any number value",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	anyNumberVar := requireBlock(t, varsBody, "variable", "any_number")
+
+	// Variable should exist but should not have validation
+	validationBlock := findBlock(anyNumberVar.Body, "validation")
+	assert.Nil(t, validationBlock, "number field without constraints should not have validation")
+}

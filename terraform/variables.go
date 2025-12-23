@@ -124,6 +124,124 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValuesRaw, ", "))))
 		}
 
+		// Generate validation for numeric constraints
+		if propSchema.Type != nil && (slices.Contains(*propSchema.Type, "integer") || slices.Contains(*propSchema.Type, "number")) {
+			varRef := hclgen.TokensForTraversal("var", tfName)
+
+			// Collect all numeric constraints
+			var constraints []string
+			var conditionParts []hclwrite.Tokens
+
+			// Handle minimum constraint (with optional exclusiveMinimum modifier)
+			if propSchema.Min != nil {
+				minVal := *propSchema.Min
+				isExclusive := propSchema.ExclusiveMin
+
+				if isExclusive {
+					constraints = append(constraints, fmt.Sprintf("> %v", minVal))
+					var minCheck hclwrite.Tokens
+					minCheck = append(minCheck, varRef...)
+					minCheck = append(minCheck, &hclwrite.Token{Type: hclsyntax.TokenGreaterThan, Bytes: []byte(" > ")})
+					minCheck = append(minCheck, hclwrite.TokensForValue(cty.NumberFloatVal(minVal))...)
+					conditionParts = append(conditionParts, minCheck)
+				} else {
+					constraints = append(constraints, fmt.Sprintf(">= %v", minVal))
+					var minCheck hclwrite.Tokens
+					minCheck = append(minCheck, varRef...)
+					minCheck = append(minCheck, &hclwrite.Token{Type: hclsyntax.TokenGreaterThanEq, Bytes: []byte(" >= ")})
+					minCheck = append(minCheck, hclwrite.TokensForValue(cty.NumberFloatVal(minVal))...)
+					conditionParts = append(conditionParts, minCheck)
+				}
+			}
+
+			// Handle maximum constraint (with optional exclusiveMaximum modifier)
+			if propSchema.Max != nil {
+				maxVal := *propSchema.Max
+				isExclusive := propSchema.ExclusiveMax
+
+				if isExclusive {
+					constraints = append(constraints, fmt.Sprintf("< %v", maxVal))
+					var maxCheck hclwrite.Tokens
+					maxCheck = append(maxCheck, varRef...)
+					maxCheck = append(maxCheck, &hclwrite.Token{Type: hclsyntax.TokenLessThan, Bytes: []byte(" < ")})
+					maxCheck = append(maxCheck, hclwrite.TokensForValue(cty.NumberFloatVal(maxVal))...)
+					conditionParts = append(conditionParts, maxCheck)
+				} else {
+					constraints = append(constraints, fmt.Sprintf("<= %v", maxVal))
+					var maxCheck hclwrite.Tokens
+					maxCheck = append(maxCheck, varRef...)
+					maxCheck = append(maxCheck, &hclwrite.Token{Type: hclsyntax.TokenLessThanEq, Bytes: []byte(" <= ")})
+					maxCheck = append(maxCheck, hclwrite.TokensForValue(cty.NumberFloatVal(maxVal))...)
+					conditionParts = append(conditionParts, maxCheck)
+				}
+			}
+
+			// Handle multipleOf constraint
+			if propSchema.MultipleOf != nil {
+				multipleOfVal := *propSchema.MultipleOf
+				constraints = append(constraints, fmt.Sprintf("multiple of %v", multipleOfVal))
+
+				// Build: var.x % multipleOf == 0
+				var modCheck hclwrite.Tokens
+				modCheck = append(modCheck, varRef...)
+				modCheck = append(modCheck, &hclwrite.Token{Type: hclsyntax.TokenPercent, Bytes: []byte(" % ")})
+				modCheck = append(modCheck, hclwrite.TokensForValue(cty.NumberFloatVal(multipleOfVal))...)
+				modCheck = append(modCheck, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+				modCheck = append(modCheck, hclwrite.TokensForValue(cty.NumberIntVal(0))...)
+				conditionParts = append(conditionParts, modCheck)
+			}
+
+			// Only generate validation if there are constraints
+			if len(conditionParts) > 0 {
+				// Combine all constraint checks with &&
+				var innerCondition hclwrite.Tokens
+				for i, part := range conditionParts {
+					if i > 0 {
+						innerCondition = append(innerCondition, &hclwrite.Token{Type: hclsyntax.TokenAnd, Bytes: []byte(" &&\n      ")})
+					}
+					innerCondition = append(innerCondition, part...)
+				}
+
+				// Wrap in parentheses for multi-line formatting
+				var wrappedInner hclwrite.Tokens
+				wrappedInner = append(wrappedInner, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+				wrappedInner = append(wrappedInner, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n      ")})
+				wrappedInner = append(wrappedInner, innerCondition...)
+				wrappedInner = append(wrappedInner, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				wrappedInner = append(wrappedInner, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+
+				// Build final condition with null-safe short-circuit if not required
+				var finalCondition hclwrite.Tokens
+				if !isRequired {
+					// Build: var.x == null || (...)
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+					finalCondition = append(finalCondition, varRef...)
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+					finalCondition = append(finalCondition, hclwrite.TokensForIdentifier("null")...)
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" ||")})
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+					finalCondition = append(finalCondition, wrappedInner...)
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+				} else {
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+					finalCondition = append(finalCondition, innerCondition...)
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+					finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+				}
+
+				// Build error message
+				errorMsg := fmt.Sprintf("%s must be %s.", tfName, strings.Join(constraints, " and "))
+
+				validation := varBody.AppendNewBlock("validation", nil)
+				validationBody := validation.Body()
+				validationBody.SetAttributeRaw("condition", finalCondition)
+				validationBody.SetAttributeValue("error_message", cty.StringVal(errorMsg))
+			}
+		}
+
 		return varBody, nil
 	}
 
