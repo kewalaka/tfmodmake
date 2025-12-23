@@ -124,6 +124,130 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValuesRaw, ", "))))
 		}
 
+		// Add string length validations for string types
+		isString := propSchema.Type != nil && slices.Contains(*propSchema.Type, "string")
+		if isString {
+			hasMinLength := propSchema.MinLength > 0
+			hasMaxLength := propSchema.MaxLength != nil && *propSchema.MaxLength > 0
+
+			if hasMinLength || hasMaxLength {
+				varRef := hclgen.TokensForTraversal("var", tfName)
+				lengthCall := hclwrite.TokensForFunctionCall("length", varRef)
+
+				var condition hclwrite.Tokens
+				// Start with null check if not required
+				if !isRequired {
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+					condition = append(condition, varRef...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+					condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" ||")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n      ")})
+				} else {
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+				}
+
+				// Add minLength check
+				if hasMinLength {
+					condition = append(condition, lengthCall...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenGreaterThanEq, Bytes: []byte(" >= ")})
+					condition = append(condition, hclwrite.TokensForValue(cty.NumberIntVal(int64(propSchema.MinLength)))...)
+					if hasMaxLength {
+						condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenAnd, Bytes: []byte(" &&")})
+						condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n      ")})
+					}
+				}
+
+				// Add maxLength check
+				if hasMaxLength {
+					condition = append(condition, lengthCall...)
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenLessThanEq, Bytes: []byte(" <= ")})
+					condition = append(condition, hclwrite.TokensForValue(cty.NumberIntVal(int64(*propSchema.MaxLength)))...)
+				}
+
+				// Close parentheses
+				if !isRequired {
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+				} else {
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+					condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+				}
+
+				// Build error message
+				var errorMsg string
+				if hasMinLength && hasMaxLength {
+					errorMsg = fmt.Sprintf("%s must be between %d and %d characters.", tfName, propSchema.MinLength, *propSchema.MaxLength)
+				} else if hasMinLength {
+					errorMsg = fmt.Sprintf("%s must be at least %d characters.", tfName, propSchema.MinLength)
+				} else {
+					errorMsg = fmt.Sprintf("%s must be at most %d characters.", tfName, *propSchema.MaxLength)
+				}
+
+				validation := varBody.AppendNewBlock("validation", nil)
+				validationBody := validation.Body()
+				validationBody.SetAttributeRaw("condition", condition)
+				validationBody.SetAttributeValue("error_message", cty.StringVal(errorMsg))
+			}
+
+			// Add format validation for allowlisted formats
+			if propSchema.Format != "" {
+				allowedFormats := map[string]struct{}{
+					"uuid": {},
+				}
+				if _, ok := allowedFormats[propSchema.Format]; ok {
+					varRef := hclgen.TokensForTraversal("var", tfName)
+					
+					var condition hclwrite.Tokens
+					var errorMsg string
+					
+					switch propSchema.Format {
+					case "uuid":
+						// UUID regex pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+						uuidPattern := "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+						regexCall := hclwrite.TokensForFunctionCall("can",
+							hclwrite.TokensForFunctionCall("regex",
+								hclwrite.TokensForValue(cty.StringVal(uuidPattern)),
+								varRef,
+							),
+						)
+						
+						if !isRequired {
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+							condition = append(condition, varRef...)
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+							condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" ||")})
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+							condition = append(condition, regexCall...)
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+						} else {
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+							condition = append(condition, regexCall...)
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+							condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+						}
+						
+						errorMsg = fmt.Sprintf("%s must be a valid UUID.", tfName)
+					}
+					
+					validation := varBody.AppendNewBlock("validation", nil)
+					validationBody := validation.Body()
+					validationBody.SetAttributeRaw("condition", condition)
+					validationBody.SetAttributeValue("error_message", cty.StringVal(errorMsg))
+				}
+			}
+		}
+
 		return varBody, nil
 	}
 

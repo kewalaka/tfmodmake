@@ -891,3 +891,414 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.connection_string_version")
 	assert.Contains(t, sensitiveBodyVersionExpr, "var.api_key_version")
 }
+
+func TestGenerate_WithMinLengthValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minLen := uint64(6)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"displayName": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The display name field",
+								MinLength:   minLen,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	nameVar := requireBlock(t, varsBody, "variable", "display_name")
+
+	// Should have validation block
+	validationBlock := findBlock(nameVar.Body, "validation")
+	require.NotNil(t, validationBlock, "display_name variable should have validation for minLength")
+
+	// Check condition
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.display_name == null")
+	assert.Contains(t, conditionExpr, "length(var.display_name) >= 6")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "display_name must be at least 6 characters.", errorMsg)
+}
+
+func TestGenerate_WithMaxLengthValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	maxLen := uint64(72)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"description": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The description field",
+								MaxLength:   &maxLen,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	descVar := requireBlock(t, varsBody, "variable", "description")
+
+	// Should have validation block
+	validationBlock := findBlock(descVar.Body, "validation")
+	require.NotNil(t, validationBlock, "description variable should have validation for maxLength")
+
+	// Check condition
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.description == null")
+	assert.Contains(t, conditionExpr, "length(var.description) <= 72")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "description must be at most 72 characters.", errorMsg)
+}
+
+func TestGenerate_WithMinAndMaxLengthValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minLen := uint64(6)
+	maxLen := uint64(72)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"password": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The password field",
+								MinLength:   minLen,
+								MaxLength:   &maxLen,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	passwordVar := requireBlock(t, varsBody, "variable", "password")
+
+	// Should have validation block
+	validationBlock := findBlock(passwordVar.Body, "validation")
+	require.NotNil(t, validationBlock, "password variable should have validation for min and max length")
+
+	// Check condition
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.password == null")
+	assert.Contains(t, conditionExpr, "length(var.password) >= 6")
+	assert.Contains(t, conditionExpr, "length(var.password) <= 72")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "password must be between 6 and 72 characters.", errorMsg)
+}
+
+func TestGenerate_WithRequiredStringLengthValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minLen := uint64(3)
+	maxLen := uint64(50)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type:     &openapi3.Types{"object"},
+					Required: []string{"requiredField"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"requiredField": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "A required field",
+								MinLength:   minLen,
+								MaxLength:   &maxLen,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	fieldVar := requireBlock(t, varsBody, "variable", "required_field")
+
+	// Should NOT have default = null for required field
+	assert.Nil(t, fieldVar.Body.Attributes["default"])
+
+	// Should have validation block
+	validationBlock := findBlock(fieldVar.Body, "validation")
+	require.NotNil(t, validationBlock, "required_field variable should have validation for length")
+
+	// Check condition - should NOT have null check for required field
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.NotContains(t, conditionExpr, "var.required_field == null")
+	assert.Contains(t, conditionExpr, "length(var.required_field) >= 3")
+	assert.Contains(t, conditionExpr, "length(var.required_field) <= 50")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "required_field must be between 3 and 50 characters.", errorMsg)
+}
+
+func TestGenerate_WithUUIDFormatValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"resourceId": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The resource ID",
+								Format:      "uuid",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	idVar := requireBlock(t, varsBody, "variable", "resource_id")
+
+	// Should have validation block for UUID format
+	validationBlock := findBlock(idVar.Body, "validation")
+	require.NotNil(t, validationBlock, "resource_id variable should have validation for uuid format")
+
+	// Check condition
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.resource_id == null")
+	assert.Contains(t, conditionExpr, "can(regex(")
+	assert.Contains(t, conditionExpr, "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "resource_id must be a valid UUID.", errorMsg)
+}
+
+func TestGenerate_NoValidationForNonAllowedFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"emailAddress": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The email address",
+								Format:      "email", // Not in allowlist
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	emailVar := requireBlock(t, varsBody, "variable", "email_address")
+
+	// Should NOT have validation block for non-allowlisted format
+	validationBlock := findBlock(emailVar.Body, "validation")
+	assert.Nil(t, validationBlock, "email_address variable should not have validation for non-allowlisted format")
+}
+
+func TestGenerate_NoValidationForZeroMinLength(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"optionalString": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "An optional string",
+								MinLength:   0, // Zero minLength should not generate validation
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	stringVar := requireBlock(t, varsBody, "variable", "optional_string")
+
+	// Should NOT have validation block for minLength = 0
+	validationBlock := findBlock(stringVar.Body, "validation")
+	assert.Nil(t, validationBlock, "optional_string variable should not have validation for minLength = 0")
+}
+
+func TestGenerate_MultipleValidationsOnSameVariable(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	minLen := uint64(36)
+	maxLen := uint64(36)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"uuid": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "A UUID field",
+								Format:      "uuid",
+								MinLength:   minLen,
+								MaxLength:   &maxLen,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	uuidVar := requireBlock(t, varsBody, "variable", "uuid")
+
+	// Should have TWO validation blocks: one for length, one for format
+	validationBlocks := make([]*hclsyntax.Block, 0)
+	for _, block := range uuidVar.Body.Blocks {
+		if block.Type == "validation" {
+			validationBlocks = append(validationBlocks, block)
+		}
+	}
+	require.Len(t, validationBlocks, 2, "uuid variable should have two validation blocks")
+
+	// First validation should be for length
+	lengthValidation := validationBlocks[0]
+	lengthCondition := expressionString(t, lengthValidation.Body.Attributes["condition"].Expr)
+	assert.Contains(t, lengthCondition, "length(var.uuid)")
+	lengthErrorMsg := attributeStringValue(t, lengthValidation.Body.Attributes["error_message"])
+	assert.Contains(t, lengthErrorMsg, "36 characters")
+
+	// Second validation should be for format
+	formatValidation := validationBlocks[1]
+	formatCondition := expressionString(t, formatValidation.Body.Attributes["condition"].Expr)
+	assert.Contains(t, formatCondition, "can(regex(")
+	formatErrorMsg := attributeStringValue(t, formatValidation.Body.Attributes["error_message"])
+	assert.Equal(t, "uuid must be a valid UUID.", formatErrorMsg)
+}
