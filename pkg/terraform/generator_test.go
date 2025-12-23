@@ -429,7 +429,7 @@ func TestConstructValue_MapAdditionalPropertiesObject(t *testing.T) {
 		{Type: hclsyntax.TokenDot, Bytes: []byte(".")},
 		{Type: hclsyntax.TokenIdent, Bytes: []byte("kube_dns_overrides")},
 	}
-	tokens := constructValue(schema, accessPath, false)
+	tokens := constructValue(schema, accessPath, false, nil)
 
 	f := hclwrite.NewEmptyFile()
 	f.Body().SetAttributeRaw("attr", tokens)
@@ -517,4 +517,120 @@ func expressionString(t *testing.T, expr hcl.Expression) string {
 	exprSrc := data[rng.Start.Byte:rng.End.Byte]
 	formatted := hclwrite.Format(exprSrc)
 	return strings.TrimSpace(string(formatted))
+}
+
+func TestGenerate_WithSecretFields(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Create a schema with a secret field marked with x-ms-secret extension
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"normalField": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "A normal field",
+							},
+						},
+						"connectionString": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "Application Insights connection string",
+								Extensions: map[string]any{
+									"x-ms-secret": true,
+								},
+							},
+						},
+						"apiKey": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "The API key",
+								Extensions: map[string]any{
+									"x-ms-secret": true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	// Check variables.tf
+	varsBody := parseHCLBody(t, "variables.tf")
+
+	// Normal field should be generated as a variable
+	normalFieldVar := requireBlock(t, varsBody, "variable", "normal_field")
+	assert.NotNil(t, normalFieldVar)
+	assert.Equal(t, "string", expressionString(t, normalFieldVar.Body.Attributes["type"].Expr))
+
+	// Secret field should be generated as a variable with ephemeral = true
+	connectionStringVar := requireBlock(t, varsBody, "variable", "connection_string")
+	assert.NotNil(t, connectionStringVar)
+	assert.Equal(t, "string", expressionString(t, connectionStringVar.Body.Attributes["type"].Expr))
+	ephemeralAttr := connectionStringVar.Body.Attributes["ephemeral"]
+	require.NotNil(t, ephemeralAttr, "connection_string should have ephemeral attribute")
+	val, diags := ephemeralAttr.Expr.Value(nil)
+	require.False(t, diags.HasErrors())
+	assert.True(t, val.True(), "ephemeral should be true")
+
+	// Secret version variable should exist
+	connectionStringVersionVar := requireBlock(t, varsBody, "variable", "connection_string_version")
+	assert.NotNil(t, connectionStringVersionVar)
+	assert.Equal(t, "number", expressionString(t, connectionStringVersionVar.Body.Attributes["type"].Expr))
+	assert.Equal(t, "null", expressionString(t, connectionStringVersionVar.Body.Attributes["default"].Expr))
+	
+	// Version variable should have validation
+	validationBlock := findBlock(connectionStringVersionVar.Body, "validation")
+	require.NotNil(t, validationBlock, "version variable should have validation")
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.connection_string")
+	assert.Contains(t, conditionExpr, "var.connection_string_version")
+
+	// Check locals.tf - secret fields should NOT be in the body
+	localsBody := parseHCLBody(t, "locals.tf")
+	localsBlock := requireBlock(t, localsBody, "locals")
+	localAttr := localsBlock.Body.Attributes["resource_body"]
+	localExpr := expressionString(t, localAttr.Expr)
+	
+	// Normal field should be present
+	assert.Contains(t, localExpr, "normalField = var.normal_field")
+	
+	// Secret fields should NOT be in locals
+	assert.NotContains(t, localExpr, "connectionString")
+	assert.NotContains(t, localExpr, "apiKey")
+
+	// Check main.tf
+	mainBody := parseHCLBody(t, "main.tf")
+	resourceBlock := requireBlock(t, mainBody, "resource", "azapi_resource", "this")
+	
+	// Should have sensitive_body attribute
+	sensitiveBodyAttr := resourceBlock.Body.Attributes["sensitive_body"]
+	require.NotNil(t, sensitiveBodyAttr, "resource should have sensitive_body attribute")
+	sensitiveBodyExpr := expressionString(t, sensitiveBodyAttr.Expr)
+	assert.Contains(t, sensitiveBodyExpr, "var.connection_string")
+	assert.Contains(t, sensitiveBodyExpr, "var.api_key")
+	assert.Contains(t, sensitiveBodyExpr, "properties.connectionString")
+	assert.Contains(t, sensitiveBodyExpr, "properties.apiKey")
+	
+	// Should have sensitive_body_version attribute
+	sensitiveBodyVersionAttr := resourceBlock.Body.Attributes["sensitive_body_version"]
+	require.NotNil(t, sensitiveBodyVersionAttr, "resource should have sensitive_body_version attribute")
+	sensitiveBodyVersionExpr := expressionString(t, sensitiveBodyVersionAttr.Expr)
+	assert.Contains(t, sensitiveBodyVersionExpr, "var.connection_string_version")
+	assert.Contains(t, sensitiveBodyVersionExpr, "var.api_key_version")
 }

@@ -15,22 +15,105 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
+// secretField represents a secret field detected in the schema.
+type secretField struct {
+	// path is the JSON path to the field, e.g., "properties.daprAIInstrumentationKey"
+	path string
+	// varName is the snake_case variable name, e.g., "dapr_ai_instrumentation_key"
+	varName string
+	// schema is the OpenAPI schema for this field
+	schema *openapi3.Schema
+}
+
+// isSecretField checks if a schema property has x-ms-secret: true extension.
+func isSecretField(schema *openapi3.Schema) bool {
+	if schema == nil || schema.Extensions == nil {
+		return false
+	}
+	if val, ok := schema.Extensions["x-ms-secret"]; ok {
+		if boolVal, ok := val.(bool); ok {
+			return boolVal
+		}
+	}
+	return false
+}
+
+// collectSecretFields traverses the schema and collects all fields marked with x-ms-secret.
+func collectSecretFields(schema *openapi3.Schema, pathPrefix string) []secretField {
+	var secrets []secretField
+	if schema == nil {
+		return secrets
+	}
+
+	var keys []string
+	for k := range schema.Properties {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, name := range keys {
+		prop := schema.Properties[name]
+		if prop == nil || prop.Value == nil || prop.Value.ReadOnly {
+			continue
+		}
+
+		propSchema := prop.Value
+		currentPath := name
+		if pathPrefix != "" {
+			currentPath = pathPrefix + "." + name
+		}
+
+		if isSecretField(propSchema) {
+			secrets = append(secrets, secretField{
+				path:    currentPath,
+				varName: toSnakeCase(name),
+				schema:  propSchema,
+			})
+		}
+
+		// Recursively check nested objects
+		if propSchema.Type != nil && slices.Contains(*propSchema.Type, "object") && len(propSchema.Properties) > 0 {
+			nested := collectSecretFields(propSchema, currentPath)
+			secrets = append(secrets, nested...)
+		}
+
+		// Check array items for nested secrets
+		if propSchema.Type != nil && slices.Contains(*propSchema.Type, "array") {
+			if propSchema.Items != nil && propSchema.Items.Value != nil {
+				itemSchema := propSchema.Items.Value
+				if itemSchema.Type != nil && slices.Contains(*itemSchema.Type, "object") && len(itemSchema.Properties) > 0 {
+					nested := collectSecretFields(itemSchema, currentPath+"[]")
+					secrets = append(secrets, nested...)
+				}
+			}
+		}
+	}
+
+	return secrets
+}
+
 // Generate generates variables.tf, locals.tf, main.tf, and outputs.tf based on the schema.
 func Generate(schema *openapi3.Schema, resourceType string, localName string, apiVersion string, supportsTags bool, supportsLocation bool) error {
 	hasSchema := schema != nil
 
+	// Collect secret fields from schema
+	var secrets []secretField
+	if hasSchema {
+		secrets = collectSecretFields(schema, "")
+	}
+
 	if err := generateTerraform(); err != nil {
 		return err
 	}
-	if err := generateVariables(schema, supportsTags, supportsLocation); err != nil {
+	if err := generateVariables(schema, supportsTags, supportsLocation, secrets); err != nil {
 		return err
 	}
 	if hasSchema {
-		if err := generateLocals(schema, localName); err != nil {
+		if err := generateLocals(schema, localName, secrets); err != nil {
 			return err
 		}
 	}
-	if err := generateMain(resourceType, apiVersion, localName, supportsTags, supportsLocation, hasSchema); err != nil {
+	if err := generateMain(schema, resourceType, apiVersion, localName, supportsTags, supportsLocation, hasSchema, secrets); err != nil {
 		return err
 	}
 	if err := generateOutputs(); err != nil {
@@ -56,9 +139,15 @@ func generateTerraform() error {
 	return hclgen.WriteFile("terraform.tf", file)
 }
 
-func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool) error {
+func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool, secrets []secretField) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
+
+	// Build a map of secret field variable names for quick lookup
+	secretVarNames := make(map[string]bool)
+	for _, secret := range secrets {
+		secretVarNames[secret.varName] = true
+	}
 
 	appendVariable := func(name, description string, typeTokens hclwrite.Tokens) (*hclwrite.Body, error) {
 		block := body.AppendNewBlock("variable", []string{name})
@@ -174,6 +263,11 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			varBody.SetAttributeRaw("default", hclwrite.TokensForIdentifier("null"))
 		}
 
+		// Mark secret fields as ephemeral
+		if secretVarNames[tfName] {
+			varBody.SetAttributeValue("ephemeral", cty.True)
+		}
+
 		if len(propSchema.Enum) > 0 {
 			var enumValuesRaw []string
 			var enumTokens []hclwrite.Tokens
@@ -208,10 +302,55 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 		}
 	}
 
+	// Add secret version variables
+	for i, secret := range secrets {
+		if i == 0 && len(keys) > 0 {
+			body.AppendNewline()
+		}
+		versionVarName := secret.varName + "_version"
+		versionBody, err := appendVariable(
+			versionVarName,
+			fmt.Sprintf("Version tracker for %s. Must be set when %s is provided.", secret.varName, secret.varName),
+			hclwrite.TokensForIdentifier("number"),
+		)
+		if err != nil {
+			return err
+		}
+
+		versionBody.SetAttributeRaw("default", hclwrite.TokensForIdentifier("null"))
+
+		// Add validation that version must be set when secret is set
+		validation := versionBody.AppendNewBlock("validation", nil)
+		validationBody := validation.Body()
+
+		// Build condition: var.secret == null || var.secret_version != null
+		secretVarRef := hclgen.TokensForTraversal("var", secret.varName)
+		versionVarRef := hclgen.TokensForTraversal("var", versionVarName)
+
+		var condition hclwrite.Tokens
+		condition = append(condition, secretVarRef...)
+		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+		condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" || ")})
+		condition = append(condition, versionVarRef...)
+		condition = append(condition, &hclwrite.Token{Type: hclsyntax.TokenNotEqual, Bytes: []byte(" != ")})
+		condition = append(condition, hclwrite.TokensForIdentifier("null")...)
+
+		validationBody.SetAttributeRaw("condition", condition)
+		validationBody.SetAttributeValue(
+			"error_message",
+			cty.StringVal(fmt.Sprintf("When %s is set, %s must also be set.", secret.varName, versionVarName)),
+		)
+
+		if i < len(secrets)-1 {
+			body.AppendNewline()
+		}
+	}
+
 	return hclgen.WriteFile("variables.tf", file)
 }
 
-func generateLocals(schema *openapi3.Schema, localName string) error {
+func generateLocals(schema *openapi3.Schema, localName string, secrets []secretField) error {
 	if schema == nil {
 		return nil
 	}
@@ -222,13 +361,23 @@ func generateLocals(schema *openapi3.Schema, localName string) error {
 	locals := body.AppendNewBlock("locals", nil)
 	localBody := locals.Body()
 
-	valueExpression := constructValue(schema, hclwrite.TokensForIdentifier("var"), true)
+	valueExpression := constructValue(schema, hclwrite.TokensForIdentifier("var"), true, secrets)
 	localBody.SetAttributeRaw(localName, valueExpression)
 
 	return hclgen.WriteFile("locals.tf", file)
 }
 
-func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool) hclwrite.Tokens {
+func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool, secrets []secretField) hclwrite.Tokens {
+	// Build a set of secret field names for quick lookup
+	secretNames := make(map[string]bool)
+	for _, secret := range secrets {
+		// Extract the last component of the path for direct property matching
+		parts := strings.Split(secret.path, ".")
+		if len(parts) > 0 {
+			secretNames[parts[len(parts)-1]] = true
+		}
+	}
+
 	if schema.Type == nil {
 		return accessPath
 	}
@@ -238,7 +387,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 	if slices.Contains(types, "object") {
 		if len(schema.Properties) == 0 {
 			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
-				mappedValue := constructValue(schema.AdditionalProperties.Schema.Value, hclwrite.TokensForIdentifier("value"), false)
+				mappedValue := constructValue(schema.AdditionalProperties.Schema.Value, hclwrite.TokensForIdentifier("value"), false, secrets)
 
 				var tokens hclwrite.Tokens
 				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenOBrace, Bytes: []byte("{")})
@@ -279,13 +428,18 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 				continue
 			}
 
+			// Skip secret fields
+			if secretNames[k] {
+				continue
+			}
+
 			snakeName := toSnakeCase(k)
 			var childAccess hclwrite.Tokens
 			childAccess = append(childAccess, accessPath...)
 			childAccess = append(childAccess, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
 			childAccess = append(childAccess, hclwrite.TokensForIdentifier(snakeName)...)
 
-			childValue := constructValue(prop.Value, childAccess, false)
+			childValue := constructValue(prop.Value, childAccess, false, secrets)
 			attrs = append(attrs, hclwrite.ObjectAttrTokens{
 				Name:  hclwrite.TokensForIdentifier(k),
 				Value: childValue,
@@ -302,7 +456,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 
 	if slices.Contains(types, "array") {
 		if schema.Items != nil && schema.Items.Value != nil {
-			childValue := constructValue(schema.Items.Value, hclwrite.TokensForIdentifier("item"), false)
+			childValue := constructValue(schema.Items.Value, hclwrite.TokensForIdentifier("item"), false, secrets)
 
 			var tokens hclwrite.Tokens
 			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenOBrack, Bytes: []byte("[")})
@@ -544,7 +698,7 @@ func cleanTypeString(typeStr string) string {
 	return strings.Join(cleaned, "/")
 }
 
-func generateMain(resourceType, apiVersion, localName string, supportsTags, supportsLocation, hasSchema bool) error {
+func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName string, supportsTags, supportsLocation, hasSchema bool, secrets []secretField) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
@@ -574,6 +728,33 @@ func generateMain(resourceType, apiVersion, localName string, supportsTags, supp
 				},
 			},
 		))
+	}
+
+	// Add sensitive_body if there are secrets
+	if len(secrets) > 0 {
+		var sensitiveAttrs []hclwrite.ObjectAttrTokens
+		for _, secret := range secrets {
+			// Build the JSON path for the secret (e.g., "properties.connectionString")
+			jsonPath := secret.path
+			
+			// Create attribute tokens for secret: "properties.fieldName" = var.field_name
+			sensitiveAttrs = append(sensitiveAttrs, hclwrite.ObjectAttrTokens{
+				Name:  hclwrite.TokensForValue(cty.StringVal(jsonPath)),
+				Value: hclgen.TokensForTraversal("var", secret.varName),
+			})
+		}
+		resourceBody.SetAttributeRaw("sensitive_body", hclwrite.TokensForObject(sensitiveAttrs))
+
+		// Add sensitive_body_version map
+		var versionAttrs []hclwrite.ObjectAttrTokens
+		for _, secret := range secrets {
+			versionVarName := secret.varName + "_version"
+			versionAttrs = append(versionAttrs, hclwrite.ObjectAttrTokens{
+				Name:  hclwrite.TokensForValue(cty.StringVal(secret.path)),
+				Value: hclgen.TokensForTraversal("var", versionVarName),
+			})
+		}
+		resourceBody.SetAttributeRaw("sensitive_body_version", hclwrite.TokensForObject(versionAttrs))
 	}
 
 	if supportsTags {
