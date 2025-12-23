@@ -13,6 +13,18 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
+const (
+	// uuidRegexPattern is a case-insensitive regex pattern for validating UUID format (RFC 4122).
+	// Matches: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx where x is a hex digit (0-9, a-f, A-F)
+	uuidRegexPattern = "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+// allowedStringFormats defines the allowlist of OpenAPI string formats that we generate validations for.
+// This is intentionally conservative to avoid incompatible or overly strict validations.
+var allowedStringFormats = map[string]struct{}{
+	"uuid": {},
+}
+
 func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool, secrets []secretField) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
@@ -127,7 +139,9 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 		// Add string length validations for string types
 		isString := propSchema.Type != nil && slices.Contains(*propSchema.Type, "string")
 		if isString {
+			// Only validate minLength > 0 (zero is the default and meaningless)
 			hasMinLength := propSchema.MinLength > 0
+			// Always validate maxLength if specified (even 0 is meaningful: must be empty)
 			hasMaxLength := propSchema.MaxLength != nil
 
 			if hasMinLength || hasMaxLength {
@@ -198,10 +212,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 
 			// Add format validation for allowlisted formats
 			if propSchema.Format != "" {
-				allowedFormats := map[string]struct{}{
-					"uuid": {},
-				}
-				if _, ok := allowedFormats[propSchema.Format]; ok {
+				if _, ok := allowedStringFormats[propSchema.Format]; ok {
 					varRef := hclgen.TokensForTraversal("var", tfName)
 					
 					var condition hclwrite.Tokens
@@ -209,11 +220,9 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 					
 					switch propSchema.Format {
 					case "uuid":
-						// UUID regex pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (case-insensitive)
-						uuidPattern := "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 						regexCall := hclwrite.TokensForFunctionCall("can",
 							hclwrite.TokensForFunctionCall("regex",
-								hclwrite.TokensForValue(cty.StringVal(uuidPattern)),
+								hclwrite.TokensForValue(cty.StringVal(uuidRegexPattern)),
 								varRef,
 							),
 						)
