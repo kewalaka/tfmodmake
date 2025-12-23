@@ -604,3 +604,373 @@ func expressionString(t *testing.T, expr hcl.Expression) string {
 	formatted := hclwrite.Format(exprSrc)
 	return strings.TrimSpace(string(formatted))
 }
+
+func TestGenerate_NumericValidation_MinMax(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 1.0
+	max := 65535.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"portStart": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "The minimum port.",
+								Min:         &min,
+								Max:         &max,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	portStartVar := requireBlock(t, varsBody, "variable", "port_start")
+	require.NotNil(t, portStartVar)
+
+	// Find the validation block
+	validationBlock := findBlock(portStartVar.Body, "validation")
+	require.NotNil(t, validationBlock, "expected validation block for port_start")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "port_start must be >= 1 and <= 65535")
+
+	// Check condition includes null check and numeric constraints
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.port_start == null")
+	assert.Contains(t, conditionExpr, "var.port_start >= 1")
+	assert.Contains(t, conditionExpr, "var.port_start <= 65535")
+}
+
+func TestGenerate_NumericValidation_ExclusiveMinMax(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 0.0
+	max := 100.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"percentage": {
+							Value: &openapi3.Schema{
+								Type:         &openapi3.Types{"number"},
+								Description:  "A percentage value.",
+								Min:          &min,
+								Max:          &max,
+								ExclusiveMin: true,
+								ExclusiveMax: true,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	percentageVar := requireBlock(t, varsBody, "variable", "percentage")
+	require.NotNil(t, percentageVar)
+
+	// Find the validation block
+	validationBlock := findBlock(percentageVar.Body, "validation")
+	require.NotNil(t, validationBlock, "expected validation block for percentage")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "percentage must be > 0 and < 100")
+
+	// Check condition uses exclusive operators
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.percentage == null")
+	assert.Contains(t, conditionExpr, "var.percentage > 0")
+	assert.Contains(t, conditionExpr, "var.percentage < 100")
+}
+
+func TestGenerate_NumericValidation_MultipleOf(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	multipleOf := 5.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"step": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "A step value.",
+								MultipleOf:  &multipleOf,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	stepVar := requireBlock(t, varsBody, "variable", "step")
+	require.NotNil(t, stepVar)
+
+	// Find the validation block
+	validationBlock := findBlock(stepVar.Body, "validation")
+	require.NotNil(t, validationBlock, "expected validation block for step")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "step must be multiple of 5")
+
+	// Check condition
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.step == null")
+	assert.Contains(t, conditionExpr, "var.step % 5")
+}
+
+func TestGenerate_NumericValidation_CombinedConstraints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 0.0
+	max := 100.0
+	multipleOf := 10.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"score": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "A score value.",
+								Min:         &min,
+								Max:         &max,
+								MultipleOf:  &multipleOf,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	scoreVar := requireBlock(t, varsBody, "variable", "score")
+	require.NotNil(t, scoreVar)
+
+	// Find the validation block
+	validationBlock := findBlock(scoreVar.Body, "validation")
+	require.NotNil(t, validationBlock, "expected validation block for score")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "score must be >= 0 and <= 100 and multiple of 10")
+
+	// Check condition
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.score == null")
+	assert.Contains(t, conditionExpr, "var.score >= 0")
+	assert.Contains(t, conditionExpr, "var.score <= 100")
+	assert.Contains(t, conditionExpr, "var.score % 10")
+}
+
+func TestGenerate_NumericValidation_SkipsReadOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 1.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"readOnlyCount": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "A read-only count.",
+								Min:         &min,
+								ReadOnly:    true,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	// ReadOnly properties should not generate variables
+	readOnlyVar := findBlock(varsBody, "variable", "read_only_count")
+	assert.Nil(t, readOnlyVar, "read-only properties should not generate variables")
+}
+
+func TestGenerate_NumericValidation_NoConstraints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"freeNumber": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"integer"},
+								Description: "A number without constraints.",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	freeNumberVar := requireBlock(t, varsBody, "variable", "free_number")
+	require.NotNil(t, freeNumberVar)
+
+	// Should not have a validation block
+	validationBlock := findBlock(freeNumberVar.Body, "validation")
+	assert.Nil(t, validationBlock, "should not have validation block when no constraints")
+}
+
+func TestGenerate_NumericValidation_DeterministicOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	min := 10.0
+	max := 100.0
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"value1": {
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"integer"},
+								Min:  &min,
+								Max:  &max,
+							},
+						},
+						"value2": {
+							Value: &openapi3.Schema{
+								Type: &openapi3.Types{"integer"},
+								Min:  &min,
+								Max:  &max,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Generate twice
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	firstContent, err := os.ReadFile("variables.tf")
+	require.NoError(t, err)
+
+	// Clean up and regenerate
+	err = os.Remove("variables.tf")
+	require.NoError(t, err)
+
+	err = Generate(schema, "testResource", "resource_body", "2025-01-01", false, false)
+	require.NoError(t, err)
+
+	secondContent, err := os.ReadFile("variables.tf")
+	require.NoError(t, err)
+
+	// Output should be identical
+	assert.Equal(t, string(firstContent), string(secondContent), "output should be deterministic")
+}

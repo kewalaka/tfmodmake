@@ -56,6 +56,128 @@ func generateTerraform() error {
 	return hclgen.WriteFile("terraform.tf", file)
 }
 
+// generateNumericValidation generates a validation block for numeric constraints.
+// Returns the condition tokens and error message, or (nil, "") if no validation is needed.
+func generateNumericValidation(tfName string, schema *openapi3.Schema, isRequired bool) (hclwrite.Tokens, string) {
+	if schema == nil {
+		return nil, ""
+	}
+
+	// Collect all numeric constraints
+	var constraints []string
+	var conditionParts []hclwrite.Tokens
+
+	varRef := hclgen.TokensForTraversal("var", tfName)
+
+	// Check minimum (inclusive by default, exclusive if ExclusiveMin is true)
+	if schema.Min != nil {
+		minVal := *schema.Min
+		if schema.ExclusiveMin {
+			constraints = append(constraints, fmt.Sprintf("> %v", minVal))
+			var part hclwrite.Tokens
+			part = append(part, varRef...)
+			part = append(part, &hclwrite.Token{Type: hclsyntax.TokenGreaterThan, Bytes: []byte(" > ")})
+			part = append(part, hclwrite.TokensForValue(cty.NumberFloatVal(minVal))...)
+			conditionParts = append(conditionParts, part)
+		} else {
+			constraints = append(constraints, fmt.Sprintf(">= %v", minVal))
+			var part hclwrite.Tokens
+			part = append(part, varRef...)
+			part = append(part, &hclwrite.Token{Type: hclsyntax.TokenGreaterThanEq, Bytes: []byte(" >= ")})
+			part = append(part, hclwrite.TokensForValue(cty.NumberFloatVal(minVal))...)
+			conditionParts = append(conditionParts, part)
+		}
+	}
+
+	// Check maximum (inclusive by default, exclusive if ExclusiveMax is true)
+	if schema.Max != nil {
+		maxVal := *schema.Max
+		if schema.ExclusiveMax {
+			constraints = append(constraints, fmt.Sprintf("< %v", maxVal))
+			var part hclwrite.Tokens
+			part = append(part, varRef...)
+			part = append(part, &hclwrite.Token{Type: hclsyntax.TokenLessThan, Bytes: []byte(" < ")})
+			part = append(part, hclwrite.TokensForValue(cty.NumberFloatVal(maxVal))...)
+			conditionParts = append(conditionParts, part)
+		} else {
+			constraints = append(constraints, fmt.Sprintf("<= %v", maxVal))
+			var part hclwrite.Tokens
+			part = append(part, varRef...)
+			part = append(part, &hclwrite.Token{Type: hclsyntax.TokenLessThanEq, Bytes: []byte(" <= ")})
+			part = append(part, hclwrite.TokensForValue(cty.NumberFloatVal(maxVal))...)
+			conditionParts = append(conditionParts, part)
+		}
+	}
+
+	// Check multipleOf
+	if schema.MultipleOf != nil {
+		multipleVal := *schema.MultipleOf
+		constraints = append(constraints, fmt.Sprintf("multiple of %v", multipleVal))
+
+		// var.x % multipleVal == 0
+		var part hclwrite.Tokens
+		part = append(part, varRef...)
+		part = append(part, &hclwrite.Token{Type: hclsyntax.TokenPercent, Bytes: []byte(" % ")})
+		part = append(part, hclwrite.TokensForValue(cty.NumberFloatVal(multipleVal))...)
+		part = append(part, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+		part = append(part, hclwrite.TokensForValue(cty.NumberIntVal(0))...)
+		conditionParts = append(conditionParts, part)
+	}
+
+	if len(conditionParts) == 0 {
+		return nil, ""
+	}
+
+	// Build the condition: combine all parts with &&
+	var innerCondition hclwrite.Tokens
+	for i, part := range conditionParts {
+		if i > 0 {
+			innerCondition = append(innerCondition, &hclwrite.Token{Type: hclsyntax.TokenAnd, Bytes: []byte(" &&")})
+			innerCondition = append(innerCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n      ")})
+		}
+		innerCondition = append(innerCondition, part...)
+	}
+
+	// Build error message
+	var errorMsg string
+	if len(constraints) == 1 {
+		errorMsg = fmt.Sprintf("%s must be %s.", tfName, constraints[0])
+	} else {
+		errorMsg = fmt.Sprintf("%s must be %s.", tfName, strings.Join(constraints, " and "))
+	}
+
+	// Wrap in null-safe condition for optional variables
+	var finalCondition hclwrite.Tokens
+	if !isRequired {
+		// var.x == null || (
+		//   <inner_condition>
+		// )
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+		finalCondition = append(finalCondition, varRef...)
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenEqualOp, Bytes: []byte(" == ")})
+		finalCondition = append(finalCondition, hclwrite.TokensForIdentifier("null")...)
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte(" ||")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n      ")})
+		finalCondition = append(finalCondition, innerCondition...)
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+	} else {
+		// Just wrap in parentheses for consistency
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenOParen, Bytes: []byte("(")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n    ")})
+		finalCondition = append(finalCondition, innerCondition...)
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n  ")})
+		finalCondition = append(finalCondition, &hclwrite.Token{Type: hclsyntax.TokenCParen, Bytes: []byte(")")})
+	}
+
+	return finalCondition, errorMsg
+}
+
 func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
@@ -157,6 +279,16 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			validationBody := validation.Body()
 			validationBody.SetAttributeRaw("condition", condition)
 			validationBody.SetAttributeValue("error_message", cty.StringVal(fmt.Sprintf("%s must be one of: %s.", tfName, strings.Join(enumValuesRaw, ", "))))
+		}
+
+		// Generate numeric validation for number/integer types with constraints
+		if propSchema.Type != nil && (slices.Contains(*propSchema.Type, "number") || slices.Contains(*propSchema.Type, "integer")) {
+			if validationBlock, errorMsg := generateNumericValidation(tfName, propSchema, isRequired); validationBlock != nil {
+				validation := varBody.AppendNewBlock("validation", nil)
+				validationBody := validation.Body()
+				validationBody.SetAttributeRaw("condition", validationBlock)
+				validationBody.SetAttributeValue("error_message", cty.StringVal(errorMsg))
+			}
 		}
 
 		return varBody, nil
