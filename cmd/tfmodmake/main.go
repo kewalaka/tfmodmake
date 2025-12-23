@@ -5,24 +5,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 
-	"github.com/matt-FFFFFF/tfmodmake/pkg/openapi"
-	"github.com/matt-FFFFFF/tfmodmake/pkg/submodule"
-	"github.com/matt-FFFFFF/tfmodmake/pkg/terraform"
+	"github.com/matt-FFFFFF/tfmodmake/openapi"
+	"github.com/matt-FFFFFF/tfmodmake/submodule"
+	"github.com/matt-FFFFFF/tfmodmake/terraform"
+	"github.com/matt-FFFFFF/tfmodmake/internal/naming"
 )
-
-var (
-	matchFirstCap = regexp.MustCompile("(.)([A-Z][a-z]+)")
-	matchAllCap   = regexp.MustCompile("([a-z0-9])([A-Z])")
-)
-
-func toSnakeCase(str string) string {
-	snake := matchFirstCap.ReplaceAllString(str, "${1}_${2}")
-	snake = matchAllCap.ReplaceAllString(snake, "${1}_${2}")
-	return strings.ToLower(snake)
-}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "addsub" {
@@ -67,6 +56,14 @@ func main() {
 		log.Fatalf("Failed to find resource: %v", err)
 	}
 
+	// Some Azure specs illegally combine `$ref` with sibling metadata like `readOnly`.
+	// Many parsers drop those siblings when resolving refs, so we re-apply property
+	// writability from the raw spec JSON where possible.
+	openapi.AnnotateSchemaRefOrigins(schema)
+	if resolver, err := openapi.NewPropertyWritabilityResolver(*specPath); err == nil && resolver != nil {
+		openapi.ApplyPropertyWritabilityOverrides(schema, resolver)
+	}
+
 	supportsTags := terraform.SupportsTags(schema)
 	supportsLocation := terraform.SupportsLocation(schema)
 
@@ -83,7 +80,7 @@ func main() {
 	} else if *rootPath != "" {
 		// properties.networkProfile -> properties_network_profile
 		finalLocalName = strings.ReplaceAll(*rootPath, ".", "_")
-		finalLocalName = toSnakeCase(finalLocalName)
+		finalLocalName = naming.ToSnakeCase(finalLocalName)
 	}
 
 	if err := terraform.Generate(schema, *resourceType, finalLocalName, apiVersion, supportsTags, supportsLocation); err != nil {

@@ -9,3 +9,7 @@ install:
 .PHONY: test
 test:
 	go test -count=1 ./...
+
+.PHONY: test-examples
+test-examples:
+	bash ./scripts/test_examples.sh
