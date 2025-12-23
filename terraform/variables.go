@@ -128,7 +128,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 		isString := propSchema.Type != nil && slices.Contains(*propSchema.Type, "string")
 		if isString {
 			hasMinLength := propSchema.MinLength > 0
-			hasMaxLength := propSchema.MaxLength != nil && *propSchema.MaxLength > 0
+			hasMaxLength := propSchema.MaxLength != nil
 
 			if hasMinLength || hasMaxLength {
 				varRef := hclgen.TokensForTraversal("var", tfName)
@@ -209,8 +209,8 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 					
 					switch propSchema.Format {
 					case "uuid":
-						// UUID regex pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-						uuidPattern := "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+						// UUID regex pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (case-insensitive)
+						uuidPattern := "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 						regexCall := hclwrite.TokensForFunctionCall("can",
 							hclwrite.TokensForFunctionCall("regex",
 								hclwrite.TokensForValue(cty.StringVal(uuidPattern)),

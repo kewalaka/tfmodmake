@@ -1302,3 +1302,54 @@ func TestGenerate_MultipleValidationsOnSameVariable(t *testing.T) {
 	formatErrorMsg := attributeStringValue(t, formatValidation.Body.Attributes["error_message"])
 	assert.Equal(t, "uuid must be a valid UUID.", formatErrorMsg)
 }
+
+func TestGenerate_MaxLengthZeroValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	maxLen := uint64(0)
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"emptyString": {
+							Value: &openapi3.Schema{
+								Type:        &openapi3.Types{"string"},
+								Description: "Must be empty",
+								MaxLength:   &maxLen,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "Microsoft.Test/testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	emptyVar := requireBlock(t, varsBody, "variable", "empty_string")
+
+	// Should have validation block even for maxLength = 0
+	validationBlock := findBlock(emptyVar.Body, "validation")
+	require.NotNil(t, validationBlock, "empty_string variable should have validation for maxLength = 0")
+
+	// Check condition
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "var.empty_string == null")
+	assert.Contains(t, conditionExpr, "length(var.empty_string) <= 0")
+
+	// Check error message
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Equal(t, "empty_string must be at most 0 characters.", errorMsg)
+}
