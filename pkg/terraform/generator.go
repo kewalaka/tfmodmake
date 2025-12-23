@@ -462,17 +462,6 @@ func generateLocals(schema *openapi3.Schema, localName string, secrets []secretF
 	return hclgen.WriteFile("locals.tf", file)
 }
 
-func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool, secrets []secretField) hclwrite.Tokens {
-	// Build a set of secret field names for quick lookup
-	secretNames := make(map[string]bool)
-	for _, secret := range secrets {
-		// Extract the last component of the path for direct property matching
-		parts := strings.Split(secret.path, ".")
-		if len(parts) > 0 {
-			secretNames[parts[len(parts)-1]] = true
-		}
-	}
-
 func isHCLIdentifier(s string) bool {
 	if s == "" {
 		return false
@@ -498,12 +487,22 @@ func tokensForObjectKey(key string) hclwrite.Tokens {
 	return hclwrite.TokensForValue(cty.StringVal(key))
 }
 
-func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath hclwrite.Tokens) hclwrite.Tokens {
+func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, secrets []secretField) hclwrite.Tokens {
 	// schema represents the OpenAPI schema at root.properties.
 	// The Terraform variables are flattened to var.<child> rather than var.properties.<child>.
 
 	if schema == nil {
 		return hclwrite.TokensForIdentifier("null")
+	}
+
+	// Build a set of secret field names for quick lookup
+	secretNames := make(map[string]bool)
+	for _, secret := range secrets {
+		// Extract the last component of the path for direct property matching
+		parts := strings.Split(secret.path, ".")
+		if len(parts) > 0 {
+			secretNames[parts[len(parts)-1]] = true
+		}
 	}
 
 	var attrs []hclwrite.ObjectAttrTokens
@@ -523,6 +522,11 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 			continue
 		}
 
+		// Skip secret fields
+		if secretNames[k] {
+			continue
+		}
+
 		snakeName := toSnakeCase(k)
 		var childAccess hclwrite.Tokens
 		childAccess = append(childAccess, accessPath...)
@@ -536,7 +540,7 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 		condition = append(condition, hclwrite.TokensForIdentifier("null")...)
 		allNullConditions = append(allNullConditions, condition)
 
-		childValue := constructValue(prop.Value, childAccess, false)
+		childValue := constructValue(prop.Value, childAccess, false, secrets)
 		attrs = append(attrs, hclwrite.ObjectAttrTokens{
 			Name:  tokensForObjectKey(k),
 			Value: childValue,
@@ -571,7 +575,17 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 	return tokens
 }
 
-func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool) hclwrite.Tokens {
+func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool, secrets []secretField) hclwrite.Tokens {
+	// Build a set of secret field names for quick lookup
+	secretNames := make(map[string]bool)
+	for _, secret := range secrets {
+		// Extract the last component of the path for direct property matching
+		parts := strings.Split(secret.path, ".")
+		if len(parts) > 0 {
+			secretNames[parts[len(parts)-1]] = true
+		}
+	}
+
 	if schema.Type == nil {
 		return accessPath
 	}
@@ -624,16 +638,18 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 
 			// Skip secret fields
 			if secretNames[k] {
-        // Flatten the top-level "properties" bag into separate variables.
-        if isRoot && k == "properties" && prop.Value.Type != nil && slices.Contains(*prop.Value.Type, "object") && len(prop.Value.Properties) > 0 {
-          childValue := constructFlattenedRootPropertiesValue(prop.Value, accessPath)
-          attrs = append(attrs, hclwrite.ObjectAttrTokens{
-            Name:  tokensForObjectKey(k),
-            Value: childValue,
-          })
-          continue
-        }
-      }
+				continue
+			}
+
+			// Flatten the top-level "properties" bag into separate variables.
+			if isRoot && k == "properties" && prop.Value.Type != nil && slices.Contains(*prop.Value.Type, "object") && len(prop.Value.Properties) > 0 {
+				childValue := constructFlattenedRootPropertiesValue(prop.Value, accessPath, secrets)
+				attrs = append(attrs, hclwrite.ObjectAttrTokens{
+					Name:  tokensForObjectKey(k),
+					Value: childValue,
+				})
+				continue
+			}
 
 			snakeName := toSnakeCase(k)
 			var childAccess hclwrite.Tokens

@@ -659,15 +659,11 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	// Check variables.tf
 	varsBody := parseHCLBody(t, "variables.tf")
 
-	// Properties should be generated as a nested object variable
-	propertiesVar := requireBlock(t, varsBody, "variable", "properties")
-	assert.NotNil(t, propertiesVar)
-	
-	// Check that properties has the right type structure including both normal and secret fields
-	typeExpr := expressionString(t, propertiesVar.Body.Attributes["type"].Expr)
-	assert.Contains(t, typeExpr, "normal_field")
-	assert.Contains(t, typeExpr, "connection_string")
-	assert.Contains(t, typeExpr, "api_key")
+	// On the merged branch, properties are flattened into individual variables
+	// Normal field should be generated as a variable
+	normalFieldVar := requireBlock(t, varsBody, "variable", "normal_field")
+	assert.NotNil(t, normalFieldVar)
+	assert.Equal(t, "string", expressionString(t, normalFieldVar.Body.Attributes["type"].Expr))
 
 	// Secret fields should also have separate top-level variables with ephemeral = true
 	connectionStringVar := requireBlock(t, varsBody, "variable", "connection_string")
@@ -701,8 +697,8 @@ func TestGenerate_WithSecretFields(t *testing.T) {
 	localAttr := localsBlock.Body.Attributes["resource_body"]
 	localExpr := expressionString(t, localAttr.Expr)
 	
-	// Normal field should be present (nested under properties)
-	assert.Contains(t, localExpr, "normalField = var.properties.normal_field")
+	// With flattened properties, normal field should be present at properties.normalField = var.normal_field
+	assert.Contains(t, localExpr, "normalField = var.normal_field")
 	
 	// Secret fields should NOT be in locals
 	assert.NotContains(t, localExpr, "connectionString")
