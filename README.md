@@ -9,7 +9,13 @@ CLI tool to generate base Terraform configuration (`variables.tf` and `locals.tf
 *   Generates Terraform variables with appropriate types and descriptions.
 *   Flattens the OpenAPI top-level `properties` bag into idiomatic top-level Terraform variables.
 *   Handles nested objects and arrays.
-*   Generates validation blocks for top-level enum variables.
+*   Generates validation blocks for top-level enum variables:
+    -   Detects enums from direct `enum` arrays
+    -   Extracts enum values from Azure `x-ms-enum` extensions
+    -   Follows `$ref` references (automatically resolved by kin-openapi)
+    -   Handles `allOf` schema composition
+    -   Produces null-safe, multi-line validation conditions
+    -   Ensures stable, sorted enum value output
 *   Creates a `locals.tf` file to map Terraform variables back to the API JSON structure.
 *   Supports targeting a specific root object (e.g., `properties`) to exclude unwanted fields.
 *   Customizable local variable naming.
