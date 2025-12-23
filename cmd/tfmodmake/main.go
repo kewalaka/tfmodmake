@@ -67,6 +67,14 @@ func main() {
 		log.Fatalf("Failed to find resource: %v", err)
 	}
 
+	// Some Azure specs illegally combine `$ref` with sibling metadata like `readOnly`.
+	// Many parsers drop those siblings when resolving refs, so we re-apply property
+	// writability from the raw spec JSON where possible.
+	openapi.AnnotateSchemaRefOrigins(schema)
+	if resolver, err := openapi.NewPropertyWritabilityResolver(*specPath); err == nil && resolver != nil {
+		openapi.ApplyPropertyWritabilityOverrides(schema, resolver)
+	}
+
 	supportsTags := terraform.SupportsTags(schema)
 	supportsLocation := terraform.SupportsLocation(schema)
 
