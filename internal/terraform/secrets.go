@@ -19,7 +19,8 @@ type secretField struct {
 	schema *openapi3.Schema
 }
 
-// isSecretField checks if a schema property has x-ms-secret: true extension.
+// isSecretField checks if a schema property should be treated as a secret by
+// checking writeOnly, x-ms-secret extension, or description-based heuristics.
 func isSecretField(schema *openapi3.Schema) bool {
 	if schema == nil {
 		return false
