@@ -33,7 +33,7 @@ In OpenAPI/JSON Schema, `allOf` represents schema composition where an object mu
 }
 ```
 
-## Flattening Behavior
+## Effective Schema Behavior
 
 ### Property Merging
 
@@ -106,12 +106,12 @@ conflicting definition has type=string, description="Count as string"
 
 ### Recursive Processing
 
-`FlattenAllOf` recursively processes:
-- Nested object properties
-- Array item schemas
-- Additional properties schemas
+`allOf` handling is applied recursively:
+- nested object properties
+- array item schemas
+- additionalProperties schemas
 
-This ensures deeply nested `allOf` structures are fully flattened.
+This matters because Azure specs often compose *nested* object shapes (not just the resource root).
 
 ### Cycle Handling
 
@@ -154,39 +154,15 @@ This function applies "most restrictive wins" semantics for constraints (min/max
 ### 3. No Global Flattening
 
 The original schema is preserved throughout the generation pipeline:
-- No global `FlattenAllOf` call in `main.go`
 - No per-navigation-step flattening in `NavigateSchema`
 - Properties accessed on-demand via helper functions
-
-### 4. Legacy Compatibility
-
-`FlattenAllOf()` is kept for backward compatibility but marked as deprecated:
-- Mutates the schema graph
-- No longer used in production code paths
-- New code should use `GetEffectiveProperties/Required` instead
 
 ## Testing
 
 The implementation includes comprehensive tests:
 
-### Unit Tests for FlattenAllOf (legacy)
-In `internal/openapi/allof_test.go` (13 tests):
-- ✅ Simple composition
-- ✅ Required field merging
-- ✅ ReadOnly field handling
-- ✅ Equivalent properties allowed
-- ✅ Conflicting properties error
-- ✅ Nested allOf
-- ✅ Recursive property flattening
-- ✅ No allOf (passthrough)
-- ✅ Nil schema handling
-- ✅ Cycle detection
-- ✅ Array items with allOf
-- ✅ Extension merging
-- ✅ Complex real-world Azure example
-
 ### Unit Tests for GetEffectiveProperties/Required (production code path)
-In `internal/openapi/allof_effective_test.go` (11 tests):
+In `internal/openapi/allof_effective_test.go`:
 - ✅ Simple allOf composition
 - ✅ No allOf (direct return)
 - ✅ Conflict detection with clear errors
@@ -211,11 +187,77 @@ Uses `allOf` to combine:
 - `TrackedResource` extensions
 - `ManagedCluster` specific properties
 
-After flattening, all properties are available for Terraform generation.
+After applying effective `allOf` shape merging, all properties are available for Terraform generation.
+
+#### Why this exists: a concrete, user-visible win (agent pool profiles)
+
+The AKS Managed Cluster spec composes agent pool shape via `allOf`. Without `allOf` shape merging, tfmodmake only sees the *top-level* `properties` on a schema, and will miss properties declared in `allOf` components.
+
+That leads to a very practical failure mode: the module exposes only a tiny subset of the real agent pool configuration surface.
+
+When generating `Microsoft.ContainerService/managedClusters` from:
+
+```
+https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/containerservice/resource-manager/Microsoft.ContainerService/aks/stable/2025-10-01/managedClusters.json
+```
+
+we observed this before/after in the generated Terraform.
+
+**Before (no effective `allOf` merge):** `agent_pool_profiles` contains only `name`.
+
+```hcl
+variable "agent_pool_profiles" {
+  type = list(object({
+    name = string
+  }))
+}
+```
+
+**After (effective `allOf` merge):** `agent_pool_profiles` exposes the real shape (a small sample shown here).
+
+```hcl
+variable "agent_pool_profiles" {
+  type = list(object({
+    name                = string
+    enable_auto_scaling = optional(bool)
+    min_count           = optional(number)
+    max_count           = optional(number)
+    vm_size             = optional(string)
+    vnet_subnet_id      = optional(string)
+    node_labels         = optional(map(string))
+    kubelet_config      = optional(object({
+      cpu_manager_policy = optional(string)
+      pod_max_pids       = optional(number)
+    }))
+  }))
+}
+```
+
+This isn’t “just typing”: the locals wiring also starts sending these fields into the request body (showing the same sample fields):
+
+```hcl
+agentPoolProfiles = var.agent_pool_profiles == null ? null : [for item in var.agent_pool_profiles : {
+  name              = item.name
+  enableAutoScaling = item.enable_auto_scaling
+  minCount          = item.min_count
+  maxCount          = item.max_count
+  vmSize            = item.vm_size
+  vnetSubnetID      = item.vnet_subnet_id
+  nodeLabels        = item.node_labels
+  kubeletConfig     = item.kubelet_config == null ? null : {
+    cpuManagerPolicy = item.kubelet_config.cpu_manager_policy
+    podMaxPids       = item.kubelet_config.pod_max_pids
+  }
+}]
+```
+
+Net effect: `allOf` shape merging prevents a class of “missing configuration surface” bugs that are otherwise very hard to diagnose (because the spec is valid, but the generator is blind to composed properties).
 
 ### Azure Container Apps managedEnvironments
 
 Similarly uses `allOf` for composition. The flattening correctly merges common types with resource-specific properties.
+
+Note: for some resources (including managedEnvironments), `allOf` is often used primarily for inheriting base resource metadata (`TrackedResource` / `ProxyResource`). Since many inherited fields are `readOnly` (or already handled via dedicated top-level variables like `location`/`tags`), you may not see large new input surfaces from `allOf` in those cases.
 
 ## Performance
 
