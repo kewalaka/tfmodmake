@@ -157,6 +157,13 @@ func NavigateSchema(schema *openapi3.Schema, path string) (*openapi3.Schema, err
 	parts := strings.Split(path, ".")
 	current := schema
 	for _, part := range parts {
+		// Flatten allOf at each level to ensure properties are visible
+		flattened, err := FlattenAllOf(current)
+		if err != nil {
+			return nil, fmt.Errorf("flattening schema at path segment %s: %w", part, err)
+		}
+		current = flattened
+
 		if current.Properties == nil {
 			return nil, fmt.Errorf("path segment %s not found: schema has no properties", part)
 		}
@@ -172,5 +179,7 @@ func NavigateSchema(schema *openapi3.Schema, path string) (*openapi3.Schema, err
 		}
 		current = prop.Value
 	}
-	return current, nil
+
+	// Flatten the final schema as well
+	return FlattenAllOf(current)
 }
