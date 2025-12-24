@@ -322,6 +322,21 @@ func TestIsLeafScalar(t *testing.T) {
 			schema:   &openapi3.Schema{},
 			expected: false,
 		},
+		{
+			name:     "nullable string is scalar",
+			schema:   &openapi3.Schema{Type: &openapi3.Types{"null", "string"}},
+			expected: true,
+		},
+		{
+			name:     "nullable integer is scalar",
+			schema:   &openapi3.Schema{Type: &openapi3.Types{"null", "integer"}},
+			expected: true,
+		},
+		{
+			name:     "nullable object is not scalar",
+			schema:   &openapi3.Schema{Type: &openapi3.Types{"null", "object"}},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -387,6 +402,26 @@ func TestShouldBlockPath(t *testing.T) {
 			name:     "allows provisioningState",
 			path:     "properties.provisioningState",
 			expected: false,
+		},
+		{
+			name:     "blocks root-level status",
+			path:     "status",
+			expected: true,
+		},
+		{
+			name:     "blocks root-level status with property",
+			path:     "status.phase",
+			expected: true,
+		},
+		{
+			name:     "blocks root-level provisioningError",
+			path:     "provisioningError",
+			expected: true,
+		},
+		{
+			name:     "blocks root-level provisioningError with property",
+			path:     "provisioningError.code",
+			expected: true,
 		},
 	}
 

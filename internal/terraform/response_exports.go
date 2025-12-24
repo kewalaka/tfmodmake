@@ -37,16 +37,20 @@ func extractReadOnlyPaths(schema *openapi3.Schema) []string {
 }
 
 // extractReadOnlyPathsRecursive recursively traverses the schema to find readOnly leaf scalars.
+// Uses a recursion stack to prevent infinite loops while allowing the same schema to be
+// visited multiple times if it appears in different paths.
 func extractReadOnlyPathsRecursive(schema *openapi3.Schema, currentPath string, paths *[]string, visited map[*openapi3.Schema]struct{}) {
 	if schema == nil {
 		return
 	}
 
-	// Prevent infinite recursion from circular references
+	// Prevent infinite recursion from circular references using a stack-based approach
+	// Mark as visited before descending, unmark on return
 	if _, seen := visited[schema]; seen {
 		return
 	}
 	visited[schema] = struct{}{}
+	defer delete(visited, schema)
 
 	// Check if this is a readOnly leaf scalar
 	if schema.ReadOnly && isLeafScalar(schema) {
@@ -84,7 +88,7 @@ func extractReadOnlyPathsRecursive(schema *openapi3.Schema, currentPath string, 
 }
 
 // isLeafScalar returns true if the schema represents a scalar type (string, number, integer, boolean)
-// and is not an object or array.
+// and is not an object or array. Checks all types in the schema.Type array.
 func isLeafScalar(schema *openapi3.Schema) bool {
 	if schema == nil || schema.Type == nil {
 		return false
@@ -95,8 +99,19 @@ func isLeafScalar(schema *openapi3.Schema) bool {
 		return false
 	}
 
-	typ := types[0]
-	return typ == "string" || typ == "number" || typ == "integer" || typ == "boolean"
+	// Check all types in the array (e.g., ["null", "string"])
+	// Return true if any type is a scalar (ignoring "null")
+	hasScalar := false
+	for _, typ := range types {
+		if typ == "string" || typ == "number" || typ == "integer" || typ == "boolean" {
+			hasScalar = true
+		} else if typ != "null" {
+			// If there's a non-scalar, non-null type (object, array), it's not a leaf scalar
+			return false
+		}
+	}
+
+	return hasScalar
 }
 
 // filterBlocklistedPaths removes paths that match the blocklist criteria:
@@ -125,13 +140,15 @@ func shouldBlockPath(path string) bool {
 		return true
 	}
 
-	// Block status-related paths
-	if strings.Contains(path, ".status.") {
+	// Block status-related paths (both root-level and nested)
+	// Matches: "status", "status.phase", "properties.status.ready"
+	if path == "status" || strings.HasPrefix(path, "status.") || strings.Contains(path, ".status.") {
 		return true
 	}
 
-	// Block provisioning error paths
-	if strings.Contains(path, ".provisioningError.") {
+	// Block provisioning error paths (both root-level and nested)
+	// Matches: "provisioningError", "provisioningError.code", "properties.provisioningError.message"
+	if path == "provisioningError" || strings.HasPrefix(path, "provisioningError.") || strings.Contains(path, ".provisioningError.") {
 		return true
 	}
 

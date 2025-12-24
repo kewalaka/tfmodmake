@@ -28,7 +28,7 @@ func TestResponseExportValues_ContainerAppsManagedEnvironments(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test")
 	}
-	t.Parallel()
+	// Note: t.Parallel() removed due to os.Chdir race condition
 
 	tmpDir := t.TempDir()
 	originalWd, err := os.Getwd()
@@ -84,7 +84,7 @@ func TestResponseExportValues_AKSManagedClusters(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test")
 	}
-	t.Parallel()
+	// Note: t.Parallel() removed due to os.Chdir race condition
 
 	tmpDir := t.TempDir()
 	originalWd, err := os.Getwd()
