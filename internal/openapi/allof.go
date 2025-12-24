@@ -17,8 +17,33 @@ func GetEffectiveProperties(schema *openapi3.Schema) (map[string]*openapi3.Schem
 		return nil, nil
 	}
 
+	cache := make(map[*openapi3.Schema]map[string]*openapi3.SchemaRef)
+	inProgress := make(map[*openapi3.Schema]struct{})
+	return getEffectivePropertiesRecursive(schema, cache, inProgress)
+}
+
+func getEffectivePropertiesRecursive(schema *openapi3.Schema, cache map[*openapi3.Schema]map[string]*openapi3.SchemaRef, inProgress map[*openapi3.Schema]struct{}) (map[string]*openapi3.SchemaRef, error) {
+	if schema == nil {
+		return nil, nil
+	}
+
+	// Check cache first
+	if cached, ok := cache[schema]; ok {
+		return cached, nil
+	}
+
+	// Check for cycles
+	if _, active := inProgress[schema]; active {
+		return nil, fmt.Errorf("circular reference detected in allOf chain while getting effective properties")
+	}
+
+	// Mark as in-progress
+	inProgress[schema] = struct{}{}
+	defer delete(inProgress, schema)
+
 	// If no allOf, return the schema's properties directly
 	if len(schema.AllOf) == 0 {
+		cache[schema] = schema.Properties
 		return schema.Properties, nil
 	}
 
@@ -43,7 +68,7 @@ func GetEffectiveProperties(schema *openapi3.Schema) (map[string]*openapi3.Schem
 		}
 
 		// Recursively get effective properties for the component
-		componentProps, err := GetEffectiveProperties(componentRef.Value)
+		componentProps, err := getEffectivePropertiesRecursive(componentRef.Value, cache, inProgress)
 		if err != nil {
 			return nil, fmt.Errorf("getting properties from allOf component %d: %w", i, err)
 		}
@@ -82,6 +107,7 @@ func GetEffectiveProperties(schema *openapi3.Schema) (map[string]*openapi3.Schem
 		}
 	}
 
+	cache[schema] = result
 	return result, nil
 }
 
@@ -92,10 +118,35 @@ func GetEffectiveRequired(schema *openapi3.Schema) ([]string, error) {
 		return nil, nil
 	}
 
+	cache := make(map[*openapi3.Schema][]string)
+	inProgress := make(map[*openapi3.Schema]struct{})
+	return getEffectiveRequiredRecursive(schema, cache, inProgress)
+}
+
+func getEffectiveRequiredRecursive(schema *openapi3.Schema, cache map[*openapi3.Schema][]string, inProgress map[*openapi3.Schema]struct{}) ([]string, error) {
+	if schema == nil {
+		return nil, nil
+	}
+
+	// Check cache first
+	if cached, ok := cache[schema]; ok {
+		return cached, nil
+	}
+
+	// Check for cycles
+	if _, active := inProgress[schema]; active {
+		return nil, fmt.Errorf("circular reference detected in allOf chain while getting effective required fields")
+	}
+
+	// Mark as in-progress
+	inProgress[schema] = struct{}{}
+	defer delete(inProgress, schema)
+
 	// If no allOf, return the schema's required directly
 	if len(schema.AllOf) == 0 {
 		result := make([]string, len(schema.Required))
 		copy(result, schema.Required)
+		cache[schema] = result
 		return result, nil
 	}
 
@@ -114,7 +165,7 @@ func GetEffectiveRequired(schema *openapi3.Schema) ([]string, error) {
 		}
 
 		// Recursively get effective required for the component
-		componentRequired, err := GetEffectiveRequired(componentRef.Value)
+		componentRequired, err := getEffectiveRequiredRecursive(componentRef.Value, cache, inProgress)
 		if err != nil {
 			return nil, fmt.Errorf("getting required from allOf component %d: %w", i, err)
 		}
@@ -131,6 +182,7 @@ func GetEffectiveRequired(schema *openapi3.Schema) ([]string, error) {
 	}
 	sort.Strings(result)
 
+	cache[schema] = result
 	return result, nil
 }
 

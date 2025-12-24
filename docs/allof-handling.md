@@ -124,40 +124,53 @@ Each schema is processed once and cached. Subsequent references return the cache
 
 ## Integration Points
 
-### 1. Main Processing Pipeline
+### 1. Non-Destructive Shape Generation
 
-In `cmd/tfmodmake/main.go`, schemas are flattened after loading:
-
-```go
-schema, err := openapi.FindResource(doc, resourceType)
-// ... apply writability overrides ...
-schema, err = openapi.FlattenAllOf(schema)
-```
-
-### 2. Schema Navigation
-
-In `openapi.NavigateSchema`, schemas are flattened at each level:
+**Shape consumers** (types/locals/variables) use helper functions that return effective properties and required fields without mutating the original schema:
 
 ```go
-for _, part := range parts {
-    flattened, err := FlattenAllOf(current)
-    // ... navigate to property ...
-    current = prop.Value
-}
+// In generate_variables.go, generate_locals.go, validations.go
+effectiveProps, err := openapi.GetEffectiveProperties(schema)
+effectiveRequired, err := openapi.GetEffectiveRequired(schema)
 ```
 
-### 3. Type Generation
+These functions:
+- Merge properties and required fields from all `allOf` components
+- Use internal caching and cycle detection
+- Return errors for conflicts or cycles (treated as fatal)
+- Preserve the original schema for validation generation
 
-The flattened schema with merged properties is used by:
-- Variable generation (`generate_variables.go`)
-- Locals generation (`generate_locals.go`)
-- Type mapping (`mapType` function)
-- Validation generation (`validations.go`)
+### 2. Constraint Generation (Validation Blocks)
+
+**Constraint consumers** continue to use the original schema with `resolveSchemaForValidation()`:
+
+```go
+// In validations.go
+childSchema := resolveSchemaForValidation(prop.Value)
+```
+
+This function applies "most restrictive wins" semantics for constraints (min/max, enum, etc.) by examining the original `allOf` array, ensuring validation blocks have correct constraint merging per PR #20.
+
+### 3. No Global Flattening
+
+The original schema is preserved throughout the generation pipeline:
+- No global `FlattenAllOf` call in `main.go`
+- No per-navigation-step flattening in `NavigateSchema`
+- Properties accessed on-demand via helper functions
+
+### 4. Legacy Compatibility
+
+`FlattenAllOf()` is kept for backward compatibility but marked as deprecated:
+- Mutates the schema graph
+- No longer used in production code paths
+- New code should use `GetEffectiveProperties/Required` instead
 
 ## Testing
 
-The implementation includes 13 comprehensive tests in `internal/openapi/allof_test.go`:
+The implementation includes comprehensive tests:
 
+### Unit Tests for FlattenAllOf (legacy)
+In `internal/openapi/allof_test.go` (13 tests):
 - ✅ Simple composition
 - ✅ Required field merging
 - ✅ ReadOnly field handling
@@ -171,6 +184,23 @@ The implementation includes 13 comprehensive tests in `internal/openapi/allof_te
 - ✅ Array items with allOf
 - ✅ Extension merging
 - ✅ Complex real-world Azure example
+
+### Unit Tests for GetEffectiveProperties/Required (production code path)
+In `internal/openapi/allof_effective_test.go` (11 tests):
+- ✅ Simple allOf composition
+- ✅ No allOf (direct return)
+- ✅ Conflict detection with clear errors
+- ✅ Cycle detection (A→B→A)
+- ✅ Nested allOf
+- ✅ Required field union
+- ✅ Required field deduplication
+- ✅ Nested allOf for required
+- ✅ Memoization across multiple references
+
+### Integration Tests
+- ✅ Real Azure AKS spec generation (uses allOf extensively)
+- ✅ Real Azure Container Apps spec generation
+- ✅ ReadOnly required fields excluded from Terraform variables
 
 ## Real-World Examples
 

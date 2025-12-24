@@ -338,12 +338,12 @@ func mapType(schema *openapi3.Schema) hclwrite.Tokens {
 		// Get effective properties and required for allOf handling
 		effectiveProps, err := openapi.GetEffectiveProperties(schema)
 		if err != nil {
-			// If we can't get effective properties, fall back to direct access
-			effectiveProps = schema.Properties
+			// Errors indicate cycles or conflicts which should fail generation
+			panic(fmt.Sprintf("failed to get effective properties: %v", err))
 		}
 		effectiveRequired, err := openapi.GetEffectiveRequired(schema)
 		if err != nil {
-			effectiveRequired = schema.Required
+			panic(fmt.Sprintf("failed to get effective required: %v", err))
 		}
 		
 		if len(effectiveProps) == 0 {
@@ -398,8 +398,8 @@ func buildNestedDescription(schema *openapi3.Schema, indent string) string {
 	// Get effective properties for allOf handling
 	effectiveProps, err := openapi.GetEffectiveProperties(schema)
 	if err != nil {
-		// Fall back to direct properties if we can't get effective ones
-		effectiveProps = schema.Properties
+		// Errors indicate cycles or conflicts which should fail generation
+		panic(fmt.Sprintf("failed to get effective properties in buildNestedDescription: %v", err))
 	}
 
 	type keyPair struct {
@@ -443,7 +443,10 @@ func buildNestedDescription(schema *openapi3.Schema, indent string) string {
 		
 		// Check if nested object has properties (considering allOf)
 		nestedProps, err := openapi.GetEffectiveProperties(val)
-		if err == nil && isNested && len(nestedProps) > 0 {
+		if err != nil {
+			panic(fmt.Sprintf("failed to get effective properties for nested object: %v", err))
+		}
+		if isNested && len(nestedProps) > 0 {
 			sb.WriteString(buildNestedDescription(val, indent+"  "))
 		}
 	}

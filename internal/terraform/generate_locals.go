@@ -1,6 +1,7 @@
 package terraform
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 
@@ -40,8 +41,8 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 	// Get effective properties for allOf handling
 	effectiveProps, err := openapi.GetEffectiveProperties(schema)
 	if err != nil {
-		// Fall back to direct properties if we can't get effective ones
-		effectiveProps = schema.Properties
+		// Errors indicate cycles or conflicts which should fail generation
+		panic(fmt.Sprintf("failed to get effective properties in constructFlattenedRootPropertiesValue: %v", err))
 	}
 
 	var attrs []hclwrite.ObjectAttrTokens
@@ -121,8 +122,8 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 		// Get effective properties for allOf handling
 		effectiveProps, err := openapi.GetEffectiveProperties(schema)
 		if err != nil {
-			// Fall back to direct properties if we can't get effective ones
-			effectiveProps = schema.Properties
+			// Errors indicate cycles or conflicts which should fail generation
+			panic(fmt.Sprintf("failed to get effective properties in constructValue: %v", err))
 		}
 
 		var attrs []hclwrite.ObjectAttrTokens
