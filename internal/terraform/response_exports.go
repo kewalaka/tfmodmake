@@ -9,6 +9,16 @@ import (
 
 // extractReadOnlyPaths traverses the schema and extracts paths to readOnly leaf scalar properties.
 // It returns a sorted list of JSON paths suitable for azapi_resource.response_export_values.
+//
+// The function applies a blocklist to filter out noisy fields:
+//   - Array-indexed paths (containing "[")
+//   - Status fields (containing ".status.")
+//   - Provisioning error fields (containing ".provisioningError.")
+//   - eTag fields (case-insensitive)
+//   - Timestamp fields (createdAt, lastModified, etc.)
+//
+// These blocklist rules help generate a useful default set of exports that module authors
+// can trim to their specific needs.
 func extractReadOnlyPaths(schema *openapi3.Schema) []string {
 	if schema == nil {
 		return nil
