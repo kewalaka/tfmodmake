@@ -21,7 +21,26 @@ type secretField struct {
 
 // isSecretField checks if a schema property has x-ms-secret: true extension.
 func isSecretField(schema *openapi3.Schema) bool {
-	if schema == nil || schema.Extensions == nil {
+	if schema == nil {
+		return false
+	}
+
+	// OpenAPI 3 writeOnly is a strong signal that the field is sensitive.
+	if schema.WriteOnly {
+		return true
+	}
+
+	// Some Azure specs (notably certain Swagger/OpenAPI v2-derived specs) don't
+	// consistently mark secrets with x-ms-secret, but do document that a value is
+	// never returned. Treat those as secrets to avoid leaking them into `body`.
+	if schema.Description != "" {
+		desc := strings.ToLower(schema.Description)
+		if strings.Contains(desc, "will never be returned") || strings.Contains(desc, "never be returned from the service") {
+			return true
+		}
+	}
+
+	if schema.Extensions == nil {
 		return false
 	}
 	if val, ok := schema.Extensions["x-ms-secret"]; ok {

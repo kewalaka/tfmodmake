@@ -77,6 +77,31 @@ Generate configuration for the entire resource:
   -resource Microsoft.App/managedEnvironments
 ```
 
+```bash
+# KeyVault and KeyVault secret
+./tfmodmake \
+  -spec https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/keyvault/resource-manager/Microsoft.KeyVault/stable/2025-05-01/openapi.json \
+  -resource Microsoft.KeyVault/vaults
+
+./tfmodmake \
+  -spec https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/keyvault/resource-manager/Microsoft.KeyVault/stable/2024-11-01/secrets.json \
+  -resource Microsoft.KeyVault/vaults/secrets \
+  -local-name secret_body
+```
+
+### Submodule Wrapper Generation
+
+Generate a map-based wrapper for an existing Terraform submodule:
+
+```bash
+# From the parent module directory:
+./tfmodmake addsub modules/secrets
+
+# Generates:
+# - variables.secrets.tf
+# - main.secrets.tf
+```
+
 ### Targeting a Sub-property
 
 Generate configuration only for the `properties` object, excluding top-level fields like `tags` or `location`:
