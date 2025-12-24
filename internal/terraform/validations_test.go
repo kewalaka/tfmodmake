@@ -141,6 +141,52 @@ func TestGenerateValidations_StringUUIDFormat(t *testing.T) {
 	assert.Contains(t, errorMsg, "valid UUID")
 }
 
+func TestGenerateValidations_StringPattern(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(originalWd)
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	schema := &openapi3.Schema{
+		Type: &openapi3.Types{"object"},
+		Properties: map[string]*openapi3.SchemaRef{
+			"properties": {
+				Value: &openapi3.Schema{
+					Type: &openapi3.Types{"object"},
+					Properties: map[string]*openapi3.SchemaRef{
+						"resourceName": {
+							Value: &openapi3.Schema{
+								Type:    &openapi3.Types{"string"},
+								Pattern: "^[a-zA-Z0-9-_]{1,63}$",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	require.NoError(t, err)
+
+	varsBody := parseHCLBody(t, "variables.tf")
+	nameVar := requireBlock(t, varsBody, "variable", "resource_name")
+	
+	validationBlock := findBlock(nameVar.Body, "validation")
+	require.NotNil(t, validationBlock, "resource_name variable should have pattern validation")
+	
+	conditionExpr := expressionString(t, validationBlock.Body.Attributes["condition"].Expr)
+	assert.Contains(t, conditionExpr, "can(regex(")
+	assert.Contains(t, conditionExpr, "^[a-zA-Z0-9-_]{1,63}$")
+	assert.Contains(t, conditionExpr, "var.resource_name")
+	
+	errorMsg := attributeStringValue(t, validationBlock.Body.Attributes["error_message"])
+	assert.Contains(t, errorMsg, "must match the pattern")
+	assert.Contains(t, errorMsg, "^[a-zA-Z0-9-_]{1,63}$")
+}
+
 func TestGenerateValidations_ArrayMinItems(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalWd, err := os.Getwd()
