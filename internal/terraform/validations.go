@@ -311,7 +311,7 @@ func stringFormatConditionTokens(valueRef hclwrite.Tokens, schema *openapi3.Sche
 	if schema.Format != "uuid" {
 		return nil, false
 	}
-	regexPattern := "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+	regexPattern := "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 	regexCall := hclwrite.TokensForFunctionCall("can",
 		hclwrite.TokensForFunctionCall("regex",
 			hclwrite.TokensForValue(cty.StringVal(regexPattern)),
@@ -450,7 +450,9 @@ func resolveSchemaForValidation(schema *openapi3.Schema) *openapi3.Schema {
 	// Start with the base schema
 	resolved := schema
 
-	// Handle allOf - merge all schemas
+	// Handle allOf - merge all schemas.
+	// OpenAPI allOf semantics are effectively an intersection: the result must satisfy all subschemas.
+	// For numeric/length/item bounds, we therefore prefer the most restrictive constraint.
 	if len(schema.AllOf) > 0 {
 		merged := &openapi3.Schema{}
 		// Copy from base schema
@@ -478,6 +480,28 @@ func resolveSchemaForValidation(schema *openapi3.Schema) *openapi3.Schema {
 			}
 		}
 
+		// Helper: intersect enum sets represented as []any.
+		intersectEnum := func(a, b []any) []any {
+			if len(a) == 0 {
+				return b
+			}
+			if len(b) == 0 {
+				return a
+			}
+			setA := make(map[string]struct{}, len(a))
+			for _, v := range a {
+				setA[fmt.Sprintf("%v", v)] = struct{}{}
+			}
+			var out []any
+			for _, v := range b {
+				s := fmt.Sprintf("%v", v)
+				if _, ok := setA[s]; ok {
+					out = append(out, s)
+				}
+			}
+			return out
+		}
+
 		// Merge from each allOf schema
 		for _, schemaRef := range schema.AllOf {
 			if schemaRef.Value != nil {
@@ -485,38 +509,52 @@ func resolveSchemaForValidation(schema *openapi3.Schema) *openapi3.Schema {
 				if s.Type != nil && merged.Type == nil {
 					merged.Type = s.Type
 				}
-				if len(s.Enum) > 0 && len(merged.Enum) == 0 {
-					merged.Enum = s.Enum
+
+				if len(s.Enum) > 0 {
+					merged.Enum = intersectEnum(merged.Enum, s.Enum)
 				}
-				if s.MinLength != 0 && merged.MinLength == 0 {
+
+				if s.MinLength != 0 && s.MinLength > merged.MinLength {
 					merged.MinLength = s.MinLength
 				}
-				if s.MaxLength != nil && merged.MaxLength == nil {
-					merged.MaxLength = s.MaxLength
+				if s.MaxLength != nil {
+					if merged.MaxLength == nil || *s.MaxLength < *merged.MaxLength {
+						merged.MaxLength = s.MaxLength
+					}
 				}
-				if s.Min != nil && merged.Min == nil {
-					merged.Min = s.Min
-				}
-				if s.Max != nil && merged.Max == nil {
-					merged.Max = s.Max
-				}
-				if s.ExclusiveMin && !merged.ExclusiveMin {
-					merged.ExclusiveMin = s.ExclusiveMin
-				}
-				if s.ExclusiveMax && !merged.ExclusiveMax {
-					merged.ExclusiveMax = s.ExclusiveMax
-				}
-				if s.MultipleOf != nil && merged.MultipleOf == nil {
-					merged.MultipleOf = s.MultipleOf
-				}
-				if s.MinItems != 0 && merged.MinItems == 0 {
+
+				if s.MinItems != 0 && s.MinItems > merged.MinItems {
 					merged.MinItems = s.MinItems
 				}
-				if s.MaxItems != nil && merged.MaxItems == nil {
-					merged.MaxItems = s.MaxItems
+				if s.MaxItems != nil {
+					if merged.MaxItems == nil || *s.MaxItems < *merged.MaxItems {
+						merged.MaxItems = s.MaxItems
+					}
 				}
-				if s.UniqueItems && !merged.UniqueItems {
-					merged.UniqueItems = s.UniqueItems
+				if s.UniqueItems {
+					merged.UniqueItems = true
+				}
+
+				if s.Min != nil {
+					if merged.Min == nil || *s.Min > *merged.Min {
+						merged.Min = s.Min
+						merged.ExclusiveMin = s.ExclusiveMin
+					} else if merged.Min != nil && *s.Min == *merged.Min {
+						// If the same bound appears multiple times, exclusive is more restrictive.
+						merged.ExclusiveMin = merged.ExclusiveMin || s.ExclusiveMin
+					}
+				}
+				if s.Max != nil {
+					if merged.Max == nil || *s.Max < *merged.Max {
+						merged.Max = s.Max
+						merged.ExclusiveMax = s.ExclusiveMax
+					} else if merged.Max != nil && *s.Max == *merged.Max {
+						merged.ExclusiveMax = merged.ExclusiveMax || s.ExclusiveMax
+					}
+				}
+
+				if s.MultipleOf != nil && merged.MultipleOf == nil {
+					merged.MultipleOf = s.MultipleOf
 				}
 				if s.Format != "" && merged.Format == "" {
 					merged.Format = s.Format

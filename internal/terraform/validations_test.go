@@ -696,6 +696,47 @@ func TestGenerateValidations_RequiredField(t *testing.T) {
 	assert.Contains(t, conditionExpr, "length(var.required_name) >= 1")
 }
 
+func TestResolveSchemaForValidation_AllOfMostRestrictive(t *testing.T) {
+	maxLen100 := uint64(100)
+	maxLen50 := uint64(50)
+	maxItems10 := uint64(10)
+	maxItems5 := uint64(5)
+	min0 := float64(0)
+	min5 := float64(5)
+	max20 := float64(20)
+	max10 := float64(10)
+
+	s := &openapi3.Schema{
+		AllOf: []*openapi3.SchemaRef{
+			{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}, MinLength: 1, MaxLength: &maxLen100}},
+			{Value: &openapi3.Schema{MinLength: 3, MaxLength: &maxLen50}},
+			{Value: &openapi3.Schema{MinItems: 1, MaxItems: &maxItems10}},
+			{Value: &openapi3.Schema{MinItems: 2, MaxItems: &maxItems5}},
+			{Value: &openapi3.Schema{Min: &min0, Max: &max20}},
+			{Value: &openapi3.Schema{Min: &min5, ExclusiveMin: true, Max: &max10, ExclusiveMax: true}},
+		},
+	}
+
+	resolved := resolveSchemaForValidation(s)
+	require.NotNil(t, resolved)
+	assert.Equal(t, uint64(3), resolved.MinLength)
+	if assert.NotNil(t, resolved.MaxLength) {
+		assert.Equal(t, uint64(50), *resolved.MaxLength)
+	}
+	assert.Equal(t, uint64(2), resolved.MinItems)
+	if assert.NotNil(t, resolved.MaxItems) {
+		assert.Equal(t, uint64(5), *resolved.MaxItems)
+	}
+	if assert.NotNil(t, resolved.Min) {
+		assert.Equal(t, 5.0, *resolved.Min)
+		assert.True(t, resolved.ExclusiveMin)
+	}
+	if assert.NotNil(t, resolved.Max) {
+		assert.Equal(t, 10.0, *resolved.Max)
+		assert.True(t, resolved.ExclusiveMax)
+	}
+}
+
 // Helper function to find all blocks of a given type
 func findAllBlocks(body *hclsyntax.Body, typ string) []*hclsyntax.Block {
 	var blocks []*hclsyntax.Block
