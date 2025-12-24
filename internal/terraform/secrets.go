@@ -35,7 +35,7 @@ func isSecretField(schema *openapi3.Schema) bool {
 	// never returned. Treat those as secrets to avoid leaking them into `body`.
 	if schema.Description != "" {
 		desc := strings.ToLower(schema.Description)
-		if strings.Contains(desc, "will never be returned") || strings.Contains(desc, "never be returned from the service") {
+		if strings.Contains(desc, "never be returned") {
 			return true
 		}
 	}
