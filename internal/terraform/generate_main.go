@@ -94,7 +94,8 @@ func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName s
 		}
 		resourceBody.SetAttributeValue("response_export_values", cty.ListVal(exportValues))
 
-		// Add a comment explaining that users should trim to what they need
+		// Add a reminder comment after the resource block.
+		// This placement makes it stand out to users who should customize the exports.
 		body.AppendUnstructuredTokens(hclwrite.Tokens{
 			{Type: hclsyntax.TokenComment, Bytes: []byte("\n# Trim response_export_values to only the computed fields you need.\n")},
 		})

@@ -136,8 +136,9 @@ func shouldBlockPath(path string) bool {
 	}
 
 	// Block eTag fields (case-insensitive)
+	// Matches both standalone "eTag" and paths ending with ".eTag"
 	lowerPath := strings.ToLower(path)
-	if strings.HasSuffix(lowerPath, "etag") || strings.HasSuffix(lowerPath, ".etag") {
+	if lowerPath == "etag" || strings.HasSuffix(lowerPath, ".etag") {
 		return true
 	}
 
