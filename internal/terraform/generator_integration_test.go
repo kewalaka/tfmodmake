@@ -56,7 +56,7 @@ func TestResponseExportValues_ContainerAppsManagedEnvironments(t *testing.T) {
 	supportsLocation := SupportsLocation(schema)
 	apiVersion := doc.Info.Version
 
-	err = Generate(schema, "Microsoft.App/managedEnvironments", "resource_body", apiVersion, supportsTags, supportsLocation)
+	err = Generate(schema, "Microsoft.App/managedEnvironments", "resource_body", apiVersion, supportsTags, supportsLocation, nil)
 	require.NoError(t, err)
 
 	mainBytes, err := os.ReadFile("main.tf")
@@ -112,7 +112,7 @@ func TestResponseExportValues_AKSManagedClusters(t *testing.T) {
 	supportsLocation := SupportsLocation(schema)
 	apiVersion := doc.Info.Version
 
-	err = Generate(schema, "Microsoft.ContainerService/managedClusters", "resource_body", apiVersion, supportsTags, supportsLocation)
+	err = Generate(schema, "Microsoft.ContainerService/managedClusters", "resource_body", apiVersion, supportsTags, supportsLocation, nil)
 	require.NoError(t, err)
 
 	mainBytes, err := os.ReadFile("main.tf")

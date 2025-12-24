@@ -12,6 +12,8 @@ In Azure OpenAPI specifications, sensitive fields like passwords, connection str
 - Support lifecycle management through versioning
 - Enable secure passing of sensitive values through Terraform
 
+Note: some real-world Azure specs do not consistently mark secrets with `x-ms-secret`. In a small number of cases, `tfmodmake` falls back to additional signals (e.g., `writeOnly` or specific description phrasing) to keep secrets out of `body`. This is considered a spec-quality smell and is tracked in [rest-api-issues.md](rest-api-issues.md).
+
 ### Example
 
 ```json
