@@ -1091,7 +1091,7 @@ func TestGenerate_ResponseExportValues(t *testing.T) {
 	}
 
 	apiVersion := "2024-01-01"
-	err = Generate(schema, "Microsoft.App/managedEnvironments", "resource_body", apiVersion, false, true)
+	err = Generate(schema, "Microsoft.App/managedEnvironments", "resource_body", apiVersion, false, true, nil)
 	require.NoError(t, err)
 
 	mainBody := parseHCLBody(t, "main.tf")
@@ -1190,7 +1190,7 @@ func TestGenerate_ResponseExportValuesWithBlocklist(t *testing.T) {
 		},
 	}
 
-	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false, nil)
 	require.NoError(t, err)
 
 	mainBody := parseHCLBody(t, "main.tf")
@@ -1239,7 +1239,7 @@ func TestGenerate_ResponseExportValuesEmptyWhenNoReadOnly(t *testing.T) {
 		},
 	}
 
-	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false)
+	err = Generate(schema, "testResource", "resource_body", "2024-01-01", false, false, nil)
 	require.NoError(t, err)
 
 	mainBody := parseHCLBody(t, "main.tf")
