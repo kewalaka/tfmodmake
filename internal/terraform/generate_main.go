@@ -23,7 +23,7 @@ func cleanTypeString(typeStr string) string {
 	return strings.Join(cleaned, "/")
 }
 
-func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName string, supportsTags, supportsLocation, hasSchema bool, secrets []secretField) error {
+func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName string, supportsTags, supportsLocation, supportsIdentity, hasSchema bool, secrets []secretField) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
@@ -39,6 +39,7 @@ func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName s
 	resourceBody.SetAttributeRaw("name", hclgen.TokensForTraversal("var", "name"))
 	resourceBody.SetAttributeRaw("parent_id", hclgen.TokensForTraversal("var", "parent_id"))
 	resourceBody.SetAttributeValue("ignore_null_property", cty.BoolVal(true))
+	resourceBody.SetAttributeValue("schema_validation_enabled", cty.BoolVal(true))
 
 	if supportsLocation {
 		resourceBody.SetAttributeRaw("location", hclgen.TokensForTraversal("var", "location"))
@@ -83,6 +84,17 @@ func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName s
 
 	if supportsTags {
 		resourceBody.SetAttributeRaw("tags", hclgen.TokensForTraversal("var", "tags"))
+	}
+
+	if supportsIdentity {
+		dyn := resourceBody.AppendNewBlock("dynamic", []string{"identity"})
+		dynBody := dyn.Body()
+		dynBody.SetAttributeRaw("for_each", hclgen.TokensForTraversal("local", "managed_identities", "system_assigned_user_assigned"))
+
+		content := dynBody.AppendNewBlock("content", nil)
+		contentBody := content.Body()
+		contentBody.SetAttributeRaw("type", hclgen.TokensForTraversal("identity", "value", "type"))
+		contentBody.SetAttributeRaw("identity_ids", hclgen.TokensForTraversal("identity", "value", "user_assigned_resource_ids"))
 	}
 
 	// Generate response_export_values from computed (non-writable) fields in the schema

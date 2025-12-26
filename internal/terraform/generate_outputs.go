@@ -91,6 +91,7 @@ func schemaForPathRecursive(schema *openapi3.Schema, segments []string, visited 
 		return nil
 	}
 	visited[schema] = struct{}{}
+	defer delete(visited, schema)
 
 	propName := segments[0]
 	if propRef, ok := schema.Properties[propName]; ok && propRef != nil && propRef.Value != nil {

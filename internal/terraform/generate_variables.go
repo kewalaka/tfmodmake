@@ -14,7 +14,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation bool, secrets []secretField, nameSchema *openapi3.Schema) error {
+func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, supportsIdentity bool, secrets []secretField, nameSchema *openapi3.Schema) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
@@ -131,6 +131,28 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 		body.AppendNewline()
 	}
 
+	if supportsIdentity {
+		managedIdentitiesBody := appendVariable(
+			"managed_identities",
+			"Managed identities configuration for this resource.",
+			hclwrite.TokensForFunctionCall(
+				"object",
+				hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+					{Name: hclwrite.TokensForIdentifier("system_assigned"), Value: hclwrite.TokensForIdentifier("bool")},
+					{Name: hclwrite.TokensForIdentifier("user_assigned_resource_ids"), Value: hclwrite.TokensForFunctionCall("list", hclwrite.TokensForIdentifier("string"))},
+				}),
+			),
+		)
+		managedIdentitiesBody.SetAttributeRaw(
+			"default",
+			hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+				{Name: hclwrite.TokensForIdentifier("system_assigned"), Value: hclwrite.TokensForIdentifier("false")},
+				{Name: hclwrite.TokensForIdentifier("user_assigned_resource_ids"), Value: hclwrite.TokensForValue(cty.ListValEmpty(cty.String))},
+			}),
+		)
+		body.AppendNewline()
+	}
+
 	seenNames := map[string]struct{}{
 		"name":      {},
 		"parent_id": {},
@@ -140,6 +162,9 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 	}
 	if supportsTags {
 		seenNames["tags"] = struct{}{}
+	}
+	if supportsIdentity {
+		seenNames["managed_identities"] = struct{}{}
 	}
 
 	// Get effective properties and required (handling allOf)
@@ -156,7 +181,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 		if err != nil {
 			return fmt.Errorf("getting effective required: %w", err)
 		}
-		
+
 		for k := range effectiveProps {
 			keys = append(keys, k)
 		}
@@ -166,6 +191,13 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 	for i, name := range keys {
 		prop := effectiveProps[name]
 		if prop == nil || prop.Value == nil {
+			continue
+		}
+
+		// Identity is handled via managed identity scaffolding in main.tf when supported.
+		// When not supported, we avoid generating an input for identity, since many specs
+		// only expose identity as read-only metadata.
+		if name == "identity" {
 			continue
 		}
 		if supportsTags && name == "tags" {
@@ -190,7 +222,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation b
 			if err != nil {
 				return fmt.Errorf("getting effective required for 'properties': %w", err)
 			}
-			
+
 			if propSchema.Type != nil && slices.Contains(*propSchema.Type, "object") && len(propEffectiveProps) > 0 {
 				var childKeys []string
 				for ck := range propEffectiveProps {
@@ -352,7 +384,7 @@ func mapType(schema *openapi3.Schema) hclwrite.Tokens {
 		if err != nil {
 			panic(fmt.Sprintf("failed to get effective required: %v", err))
 		}
-		
+
 		if len(effectiveProps) == 0 {
 			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
 				valueType := mapType(schema.AdditionalProperties.Schema.Value)
@@ -447,7 +479,7 @@ func buildNestedDescription(schema *openapi3.Schema, indent string) string {
 				isNested = true
 			}
 		}
-		
+
 		// Check if nested object has properties (considering allOf)
 		nestedProps, err := openapi.GetEffectiveProperties(val)
 		if err != nil {

@@ -10,9 +10,10 @@ import (
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/matt-FFFFFF/tfmodmake/internal/hclgen"
 	"github.com/matt-FFFFFF/tfmodmake/internal/openapi"
+	"github.com/zclconf/go-cty/cty"
 )
 
-func generateLocals(schema *openapi3.Schema, localName string, secrets []secretField) error {
+func generateLocals(schema *openapi3.Schema, localName string, supportsIdentity bool, secrets []secretField) error {
 	if schema == nil {
 		return nil
 	}
@@ -24,8 +25,13 @@ func generateLocals(schema *openapi3.Schema, localName string, secrets []secretF
 	localBody := locals.Body()
 
 	secretPaths := newSecretPathSet(secrets)
-	valueExpression := constructValue(schema, hclwrite.TokensForIdentifier("var"), true, secretPaths, "")
+	valueExpression := constructValue(schema, hclwrite.TokensForIdentifier("var"), true, secretPaths, "", supportsIdentity)
 	localBody.SetAttributeRaw(localName, valueExpression)
+
+	// Managed identity scaffolding (only when the resource schema supports configuring identity).
+	if supportsIdentity {
+		localBody.SetAttributeRaw("managed_identities", tokensForManagedIdentitiesLocal())
+	}
 
 	return hclgen.WriteFile("locals.tf", file)
 }
@@ -75,7 +81,7 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 		childAccess = append(childAccess, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
 		childAccess = append(childAccess, hclwrite.TokensForIdentifier(snakeName)...)
 
-		childValue := constructValue(prop.Value, childAccess, false, secretPaths, "properties."+k)
+		childValue := constructValue(prop.Value, childAccess, false, secretPaths, "properties."+k, false)
 		attrs = append(attrs, hclwrite.ObjectAttrTokens{
 			Name:  tokensForObjectKey(k),
 			Value: childValue,
@@ -85,7 +91,7 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 	return hclwrite.TokensForObject(attrs)
 }
 
-func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool, secretPaths map[string]struct{}, pathPrefix string) hclwrite.Tokens {
+func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool, secretPaths map[string]struct{}, pathPrefix string, omitRootIdentity bool) hclwrite.Tokens {
 	if schema.Type == nil {
 		return accessPath
 	}
@@ -95,7 +101,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 	if slices.Contains(types, "object") {
 		if len(schema.Properties) == 0 {
 			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
-				mappedValue := constructValue(schema.AdditionalProperties.Schema.Value, hclwrite.TokensForIdentifier("value"), false, secretPaths, pathPrefix)
+				mappedValue := constructValue(schema.AdditionalProperties.Schema.Value, hclwrite.TokensForIdentifier("value"), false, secretPaths, pathPrefix, false)
 
 				var tokens hclwrite.Tokens
 				tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenOBrace, Bytes: []byte("{")})
@@ -139,6 +145,12 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 				continue
 			}
 
+			// Identity is configured via the azapi_resource identity block when supported.
+			// Avoid including it in the request body locals.
+			if isRoot && omitRootIdentity && k == "identity" {
+				continue
+			}
+
 			if !isWritableProperty(prop.Value) {
 				continue
 			}
@@ -169,7 +181,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 			childAccess = append(childAccess, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
 			childAccess = append(childAccess, hclwrite.TokensForIdentifier(snakeName)...)
 
-			childValue := constructValue(prop.Value, childAccess, false, secretPaths, childPath)
+			childValue := constructValue(prop.Value, childAccess, false, secretPaths, childPath, false)
 			attrs = append(attrs, hclwrite.ObjectAttrTokens{
 				Name:  tokensForObjectKey(k),
 				Value: childValue,
@@ -185,7 +197,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 
 	if slices.Contains(types, "array") {
 		if schema.Items != nil && schema.Items.Value != nil {
-			childValue := constructValue(schema.Items.Value, hclwrite.TokensForIdentifier("item"), false, secretPaths, pathPrefix+"[]")
+			childValue := constructValue(schema.Items.Value, hclwrite.TokensForIdentifier("item"), false, secretPaths, pathPrefix+"[]", false)
 
 			var tokens hclwrite.Tokens
 			tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenOBrack, Bytes: []byte("[")})
@@ -206,4 +218,82 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 	}
 
 	return accessPath
+}
+
+func tokensForManagedIdentitiesLocal() hclwrite.Tokens {
+	varManaged := hclgen.TokensForTraversal("var", "managed_identities")
+	userAssigned := append(hclwrite.Tokens(nil), varManaged...)
+	userAssigned = append(userAssigned, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
+	userAssigned = append(userAssigned, hclwrite.TokensForIdentifier("user_assigned_resource_ids")...)
+
+	systemAssigned := append(hclwrite.Tokens(nil), varManaged...)
+	systemAssigned = append(systemAssigned, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
+	systemAssigned = append(systemAssigned, hclwrite.TokensForIdentifier("system_assigned")...)
+
+	lengthUserAssigned := hclwrite.TokensForFunctionCall("length", userAssigned)
+	userAssignedGtZero := append(hclwrite.Tokens(nil), lengthUserAssigned...)
+	userAssignedGtZero = append(userAssignedGtZero, &hclwrite.Token{Type: hclsyntax.TokenGreaterThan, Bytes: []byte(">")})
+	userAssignedGtZero = append(userAssignedGtZero, hclwrite.TokensForValue(cty.NumberIntVal(0))...)
+
+	condAny := append(hclwrite.Tokens(nil), systemAssigned...)
+	condAny = append(condAny, &hclwrite.Token{Type: hclsyntax.TokenOr, Bytes: []byte("||")})
+	condAny = append(condAny, userAssignedGtZero...)
+
+	bothCond := append(hclwrite.Tokens(nil), systemAssigned...)
+	bothCond = append(bothCond, &hclwrite.Token{Type: hclsyntax.TokenAnd, Bytes: []byte("&&")})
+	bothCond = append(bothCond, userAssignedGtZero...)
+
+	typeExpr := append(hclwrite.Tokens(nil), bothCond...)
+	typeExpr = append(typeExpr, &hclwrite.Token{Type: hclsyntax.TokenQuestion, Bytes: []byte("?")})
+	typeExpr = append(typeExpr, hclwrite.TokensForValue(cty.StringVal("SystemAssigned, UserAssigned"))...)
+	typeExpr = append(typeExpr, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
+	typeExpr = append(typeExpr, userAssignedGtZero...)
+	typeExpr = append(typeExpr, &hclwrite.Token{Type: hclsyntax.TokenQuestion, Bytes: []byte("?")})
+	typeExpr = append(typeExpr, hclwrite.TokensForValue(cty.StringVal("UserAssigned"))...)
+	typeExpr = append(typeExpr, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
+	typeExpr = append(typeExpr, hclwrite.TokensForValue(cty.StringVal("SystemAssigned"))...)
+
+	identityThisObject := hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+		{Name: hclwrite.TokensForIdentifier("type"), Value: typeExpr},
+		{Name: hclwrite.TokensForIdentifier("user_assigned_resource_ids"), Value: userAssigned},
+	})
+
+	identityThis := hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+		{Name: hclwrite.TokensForIdentifier("this"), Value: identityThisObject},
+	})
+
+	emptyObj := hclwrite.TokensForObject(nil)
+
+	systemAssignedUserAssigned := append(hclwrite.Tokens(nil), condAny...)
+	systemAssignedUserAssigned = append(systemAssignedUserAssigned, &hclwrite.Token{Type: hclsyntax.TokenQuestion, Bytes: []byte("?")})
+	systemAssignedUserAssigned = append(systemAssignedUserAssigned, identityThis...)
+	systemAssignedUserAssigned = append(systemAssignedUserAssigned, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
+	systemAssignedUserAssigned = append(systemAssignedUserAssigned, emptyObj...)
+
+	systemAssignedOnly := append(hclwrite.Tokens(nil), systemAssigned...)
+	systemAssignedOnly = append(systemAssignedOnly, &hclwrite.Token{Type: hclsyntax.TokenQuestion, Bytes: []byte("?")})
+	systemAssignedOnly = append(systemAssignedOnly, hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+		{Name: hclwrite.TokensForIdentifier("this"), Value: hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+			{Name: hclwrite.TokensForIdentifier("type"), Value: hclwrite.TokensForValue(cty.StringVal("SystemAssigned"))},
+		})},
+	})...)
+	systemAssignedOnly = append(systemAssignedOnly, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
+	systemAssignedOnly = append(systemAssignedOnly, emptyObj...)
+
+	userAssignedOnly := append(hclwrite.Tokens(nil), userAssignedGtZero...)
+	userAssignedOnly = append(userAssignedOnly, &hclwrite.Token{Type: hclsyntax.TokenQuestion, Bytes: []byte("?")})
+	userAssignedOnly = append(userAssignedOnly, hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+		{Name: hclwrite.TokensForIdentifier("this"), Value: hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+			{Name: hclwrite.TokensForIdentifier("type"), Value: hclwrite.TokensForValue(cty.StringVal("UserAssigned"))},
+			{Name: hclwrite.TokensForIdentifier("user_assigned_resource_ids"), Value: userAssigned},
+		})},
+	})...)
+	userAssignedOnly = append(userAssignedOnly, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
+	userAssignedOnly = append(userAssignedOnly, emptyObj...)
+
+	return hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
+		{Name: hclwrite.TokensForIdentifier("system_assigned_user_assigned"), Value: systemAssignedUserAssigned},
+		{Name: hclwrite.TokensForIdentifier("system_assigned"), Value: systemAssignedOnly},
+		{Name: hclwrite.TokensForIdentifier("user_assigned"), Value: userAssignedOnly},
+	})
 }
