@@ -94,8 +94,6 @@ func discoverChildrenInSpec(doc *openapi3.T, parentType string, depth int, apiVe
 		return nil
 	}
 
-	parentSegments := strings.Count(parentType, "/")
-
 	for path, pathItem := range doc.Paths.Map() {
 		if pathItem == nil {
 			continue
@@ -107,14 +105,8 @@ func discoverChildrenInSpec(doc *openapi3.T, parentType string, depth int, apiVe
 			continue
 		}
 
-		// Check if this is a child of the parent
+		// Check if this is a child of the parent (depth is validated inside isChildOf)
 		if !isChildOf(resourceType, parentType, depth) {
-			continue
-		}
-
-		// Check depth constraint
-		childSegments := strings.Count(resourceType, "/")
-		if childSegments != parentSegments+depth {
 			continue
 		}
 
@@ -133,7 +125,9 @@ func discoverChildrenInSpec(doc *openapi3.T, parentType string, depth int, apiVe
 			if !contains(child.ExamplePaths, path) {
 				child.ExamplePaths = append(child.ExamplePaths, path)
 			}
-			// Prefer later API version (simple string comparison works for most Azure versions)
+			// Prefer later API version. Azure API versions use YYYY-MM-DD format (with optional
+			// -preview suffix), so simple string comparison is sufficient and correct.
+			// Examples: "2024-01-01" < "2024-03-01", "2024-01-01" < "2025-10-02-preview"
 			if apiVersion > child.APIVersion {
 				child.APIVersion = apiVersion
 			}
