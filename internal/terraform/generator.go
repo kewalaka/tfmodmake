@@ -29,7 +29,7 @@ func Generate(schema *openapi3.Schema, resourceType string, localName string, ap
 	if err := generateMain(schema, resourceType, apiVersion, localName, supportsTags, supportsLocation, hasSchema, secrets); err != nil {
 		return err
 	}
-	if err := generateOutputs(); err != nil {
+	if err := generateOutputs(schema); err != nil {
 		return err
 	}
 	return nil

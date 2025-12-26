@@ -85,14 +85,10 @@ func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName s
 		resourceBody.SetAttributeRaw("tags", hclgen.TokensForTraversal("var", "tags"))
 	}
 
-	// Generate response_export_values from readOnly fields in the schema
-	exportPaths := extractReadOnlyPaths(schema)
+	// Generate response_export_values from computed (non-writable) fields in the schema
+	exportPaths := extractComputedPaths(schema)
 	if len(exportPaths) > 0 {
-		exportValues := make([]cty.Value, len(exportPaths))
-		for i, path := range exportPaths {
-			exportValues[i] = cty.StringVal(path)
-		}
-		resourceBody.SetAttributeValue("response_export_values", cty.ListVal(exportValues))
+		resourceBody.SetAttributeRaw("response_export_values", hclgen.TokensForMultilineStringList(exportPaths))
 
 		// Add a reminder comment after the resource block.
 		// This placement makes it stand out to users who should customize the exports.

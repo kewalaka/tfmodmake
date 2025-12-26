@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestExtractReadOnlyPaths(t *testing.T) {
+func TestExtractComputedPaths(t *testing.T) {
 	tests := []struct {
 		name     string
 		schema   *openapi3.Schema
@@ -31,7 +31,7 @@ func TestExtractReadOnlyPaths(t *testing.T) {
 					},
 				},
 			},
-			expected: []string{"id"},
+			expected: []string{},
 		},
 		{
 			name: "nested readOnly properties",
@@ -118,7 +118,7 @@ func TestExtractReadOnlyPaths(t *testing.T) {
 			expected: []string{"count", "enabled", "percentage"},
 		},
 		{
-			name: "excludes readOnly objects and arrays",
+			name: "includes computed objects and arrays",
 			schema: &openapi3.Schema{
 				Type: &openapi3.Types{"object"},
 				Properties: map[string]*openapi3.SchemaRef{
@@ -154,7 +154,7 @@ func TestExtractReadOnlyPaths(t *testing.T) {
 					},
 				},
 			},
-			expected: []string{"readOnlyScalar"},
+			expected: []string{"readOnlyArray", "readOnlyObject", "readOnlyScalar"},
 		},
 		{
 			name:     "nil schema returns empty list",
@@ -172,7 +172,7 @@ func TestExtractReadOnlyPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractReadOnlyPaths(tt.schema)
+			got := extractComputedPaths(tt.schema)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
@@ -262,8 +262,8 @@ func TestFilterBlocklistedPaths(t *testing.T) {
 			},
 		},
 		{
-			name: "empty input returns empty output",
-			paths: []string{},
+			name:     "empty input returns empty output",
+			paths:    []string{},
 			expected: []string{},
 		},
 	}

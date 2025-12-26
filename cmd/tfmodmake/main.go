@@ -26,7 +26,7 @@ func main() {
 		if err := submodule.Generate(args[0]); err != nil {
 			log.Fatalf("Failed to add submodule: %v", err)
 		}
-		fmt.Println("Successfully generated variables.submodule.tf and main.submodule.tf")
+		fmt.Println("Successfully generated submodule wrapper files")
 		return
 	}
 
@@ -92,5 +92,5 @@ func main() {
 		log.Fatalf("Failed to generate terraform files: %v", err)
 	}
 
-	fmt.Println("Successfully generated variables.tf and locals.tf")
+	fmt.Println("Successfully generated Terraform files")
 }
