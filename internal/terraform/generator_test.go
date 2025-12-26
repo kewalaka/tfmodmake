@@ -140,6 +140,10 @@ func TestGenerate(t *testing.T) {
 	nameOutput := requireBlock(t, outputsBody, "output", "name")
 	assert.Equal(t, "The name of the created resource.", attributeStringValue(t, nameOutput.Body.Attributes["description"]))
 	assert.Equal(t, "azapi_resource.this.name", expressionString(t, nameOutput.Body.Attributes["value"].Expr))
+
+	readOnlyOutput := requireBlock(t, outputsBody, "output", "read_only_prop")
+	assert.Equal(t, "Computed value exported from the Azure API response.", attributeStringValue(t, readOnlyOutput.Body.Attributes["description"]))
+	assert.Equal(t, "try(azapi_resource.this.output.properties.readOnlyProp, null)", expressionString(t, readOnlyOutput.Body.Attributes["value"].Expr))
 }
 
 func TestGenerate_NameVariable_UsesNameSchemaValidations(t *testing.T) {
@@ -802,7 +806,7 @@ func TestConstructValue_MapAdditionalPropertiesObject(t *testing.T) {
 		{Type: hclsyntax.TokenDot, Bytes: []byte(".")},
 		{Type: hclsyntax.TokenIdent, Bytes: []byte("kube_dns_overrides")},
 	}
-	tokens := constructValue(schema, accessPath, false, nil, "")
+	tokens := constructValue(schema, accessPath, false, nil, "", false)
 
 	f := hclwrite.NewEmptyFile()
 	f.Body().SetAttributeRaw("attr", tokens)

@@ -7,7 +7,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// extractReadOnlyPaths traverses the schema and extracts paths to readOnly leaf scalar properties.
+// extractComputedPaths traverses the schema and extracts paths to computed (non-writable) properties.
 // It returns a sorted list of JSON paths suitable for azapi_resource.response_export_values.
 //
 // The function applies a blocklist to filter out noisy fields:
@@ -19,13 +19,13 @@ import (
 //
 // These blocklist rules help generate a useful default set of exports that module authors
 // can trim to their specific needs.
-func extractReadOnlyPaths(schema *openapi3.Schema) []string {
+func extractComputedPaths(schema *openapi3.Schema) []string {
 	if schema == nil {
 		return nil
 	}
 
 	var paths []string
-	extractReadOnlyPathsRecursive(schema, "", &paths, make(map[*openapi3.Schema]struct{}))
+	extractComputedPathsRecursive(schema, "", &paths, make(map[*openapi3.Schema]struct{}))
 
 	// Apply blocklist filtering
 	filtered := filterBlocklistedPaths(paths)
@@ -36,10 +36,10 @@ func extractReadOnlyPaths(schema *openapi3.Schema) []string {
 	return filtered
 }
 
-// extractReadOnlyPathsRecursive recursively traverses the schema to find readOnly leaf scalars.
+// extractComputedPathsRecursive recursively traverses the schema to find computed (non-writable) properties.
 // Uses a recursion stack to prevent infinite loops while allowing the same schema to be
 // visited multiple times if it appears in different paths.
-func extractReadOnlyPathsRecursive(schema *openapi3.Schema, currentPath string, paths *[]string, visited map[*openapi3.Schema]struct{}) {
+func extractComputedPathsRecursive(schema *openapi3.Schema, currentPath string, paths *[]string, visited map[*openapi3.Schema]struct{}) {
 	if schema == nil {
 		return
 	}
@@ -52,12 +52,22 @@ func extractReadOnlyPathsRecursive(schema *openapi3.Schema, currentPath string, 
 	visited[schema] = struct{}{}
 	defer delete(visited, schema)
 
-	// Check if this is a readOnly leaf scalar
-	if schema.ReadOnly && isLeafScalar(schema) {
-		if currentPath != "" {
-			*paths = append(*paths, currentPath)
+	// If this property is non-writable, it's a computed value.
+	if currentPath != "" && !isWritableProperty(schema) {
+		// Avoid exporting root-level id/name since those are already available as
+		// azapi_resource.this.id and azapi_resource.this.name.
+		if !(strings.IndexByte(currentPath, '.') == -1 && (currentPath == "id" || currentPath == "name")) {
+			// Export scalars, objects, and arrays. Objects/arrays are useful when the
+			// schema doesn't flag nested leaves as readOnly but the provider returns
+			// a computed structure.
+			if isLeafScalar(schema) || isContainer(schema) {
+				*paths = append(*paths, currentPath)
+			}
 		}
-		return
+		// For leaf scalars there's nothing more to traverse.
+		if isLeafScalar(schema) {
+			return
+		}
 	}
 
 	// Process object properties
@@ -74,7 +84,7 @@ func extractReadOnlyPathsRecursive(schema *openapi3.Schema, currentPath string, 
 				newPath = currentPath + "." + propName
 			}
 
-			extractReadOnlyPathsRecursive(propRef.Value, newPath, paths, visited)
+			extractComputedPathsRecursive(propRef.Value, newPath, paths, visited)
 		}
 	}
 
@@ -83,7 +93,7 @@ func extractReadOnlyPathsRecursive(schema *openapi3.Schema, currentPath string, 
 		if allOfRef == nil || allOfRef.Value == nil {
 			continue
 		}
-		extractReadOnlyPathsRecursive(allOfRef.Value, currentPath, paths, visited)
+		extractComputedPathsRecursive(allOfRef.Value, currentPath, paths, visited)
 	}
 }
 
@@ -112,6 +122,18 @@ func isLeafScalar(schema *openapi3.Schema) bool {
 	}
 
 	return hasScalar
+}
+
+func isContainer(schema *openapi3.Schema) bool {
+	if schema == nil || schema.Type == nil {
+		return false
+	}
+	for _, typ := range *schema.Type {
+		if typ == "object" || typ == "array" {
+			return true
+		}
+	}
+	return false
 }
 
 // filterBlocklistedPaths removes paths that match the blocklist criteria:
