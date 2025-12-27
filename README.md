@@ -71,7 +71,7 @@ The `addchild` command orchestrates the complete process of creating a child mod
 *   `-include-preview`: Also include latest preview API version (only with `-spec-root`)
 *   `-include`: Glob pattern to filter spec files (default: `*.json`)
 *   `-module-dir`: Directory for child modules (default: `modules`)
-*   `-module-name`: Override derived module folder name (default: derived from child type)
+*   `-module-name`: Override derived module folder name (default: derived from child type). **Recommended:** use singular form (e.g., `-module-name storage` instead of auto-derived `storages`) to follow the convention that each submodule manages one resource instance.
 *   `-dry-run`: Print planned actions without writing files
 
 **What it does:**
@@ -79,19 +79,25 @@ The `addchild` command orchestrates the complete process of creating a child mod
 1.  Generates a complete child module scaffold at `<module-dir>/<module-name>/`
 2.  Wires the child module into the root module using the same mechanics as `addsub`
 
+**Module naming convention:**
+
+By default, the module name is derived from the last segment of the child resource type (e.g., `.../storages` → `storages`). However, following the project convention that each submodule makes one thing (singular), it's recommended to use `-module-name` to specify a singular name when the derived name is plural.
+
 **Example:**
 
 ```bash
-# Using spec-root (recommended)
+# Using spec-root (recommended) with singular module name
 ./tfmodmake addchild \
   -parent "Microsoft.App/managedEnvironments" \
   -child "Microsoft.App/managedEnvironments/storages" \
+  -module-name "storage" \
   -spec-root "https://github.com/Azure/azure-rest-api-specs/tree/main/specification/app/resource-manager/Microsoft.App/ContainerApps"
 
-# Using explicit spec
+# Using explicit spec with singular module name
 ./tfmodmake addchild \
   -parent "Microsoft.KeyVault/vaults" \
   -child "Microsoft.KeyVault/vaults/secrets" \
+  -module-name "secret" \
   -spec "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/keyvault/resource-manager/Microsoft.KeyVault/stable/2024-11-01/secrets.json"
 
 # Custom module directory and name
@@ -100,7 +106,7 @@ The `addchild` command orchestrates the complete process of creating a child mod
   -child "Microsoft.App/managedEnvironments/certificates" \
   -spec-root "https://github.com/Azure/azure-rest-api-specs/tree/main/specification/app/resource-manager/Microsoft.App/ContainerApps" \
   -module-dir "submodules" \
-  -module-name "environment_certs"
+  -module-name "certificate"
 ```
 
 **Generated files:**

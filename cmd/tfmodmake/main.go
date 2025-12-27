@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -273,12 +274,22 @@ func handleAddChildCommand() {
 		finalModuleName = deriveModuleName(*child)
 	}
 
-	// Construct module path
-	modulePath := fmt.Sprintf("%s/%s", strings.TrimSuffix(*moduleDir, "/"), finalModuleName)
+	// Construct module path using filepath.Join for portability
+	modulePath := filepath.Join(*moduleDir, finalModuleName)
 
 	if *dryRun {
 		fmt.Printf("DRY RUN: Would create/update child module at: %s\n", modulePath)
-		fmt.Printf("DRY RUN: Would wire child module into root module\n")
+		fmt.Printf("DRY RUN: Would generate the following files in child module:\n")
+		fmt.Printf("  - %s\n", filepath.Join(modulePath, "variables.tf"))
+		fmt.Printf("  - %s\n", filepath.Join(modulePath, "locals.tf"))
+		fmt.Printf("  - %s\n", filepath.Join(modulePath, "main.tf"))
+		fmt.Printf("  - %s\n", filepath.Join(modulePath, "outputs.tf"))
+		fmt.Printf("  - %s\n", filepath.Join(modulePath, "terraform.tf"))
+		fmt.Printf("DRY RUN: Would wire child module into root module with:\n")
+		moduleDirName := filepath.Base(modulePath)
+		fmt.Printf("  - variables.%s.tf\n", moduleDirName)
+		fmt.Printf("  - main.%s.tf\n", moduleDirName)
+		fmt.Printf("DRY RUN: Using %d resolved spec(s)\n", len(specSources))
 		return
 	}
 
@@ -343,7 +354,7 @@ func generateChildModule(specs []string, childType, modulePath string) error {
 		// Try to find the child resource in this spec
 		foundSchema, err := openapi.FindResource(doc, childType)
 		if err != nil {
-			searchErrors = append(searchErrors, fmt.Sprintf("- %s: resource not found", specPath))
+			searchErrors = append(searchErrors, fmt.Sprintf("- %s: %v", specPath, err))
 			continue // Try next spec
 		}
 
@@ -382,25 +393,39 @@ func generateChildModule(specs []string, childType, modulePath string) error {
 		return fmt.Errorf("%s", errMsg)
 	}
 
-	// Save current directory
+	// Generate Terraform files in the module directory
+	// We need to temporarily change directory because terraform.Generate writes to the current directory
+	if err := generateInDirectory(modulePath, func() error {
+		localName := "resource_body"
+		return terraform.Generate(schema, childType, localName, apiVersion, supportsTags, supportsLocation, nameSchema)
+	}); err != nil {
+		return fmt.Errorf("failed to generate terraform files: %w", err)
+	}
+
+	return nil
+}
+
+// generateInDirectory changes to the specified directory, executes the function, and changes back.
+// This is a temporary workaround until terraform.Generate can accept an output directory parameter.
+func generateInDirectory(dir string, fn func() error) error {
 	originalDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	// Change to module directory
-	if err := os.Chdir(modulePath); err != nil {
-		return fmt.Errorf("failed to change to module directory: %w", err)
-	}
-	defer os.Chdir(originalDir)
-
-	// Generate Terraform files using the same logic as the main command
-	localName := "resource_body"
-	if err := terraform.Generate(schema, childType, localName, apiVersion, supportsTags, supportsLocation, nameSchema); err != nil {
-		return fmt.Errorf("failed to generate terraform files: %w", err)
+	if err := os.Chdir(dir); err != nil {
+		return fmt.Errorf("failed to change to directory %s: %w", dir, err)
 	}
 
-	return nil
+	// Ensure we change back even if fn panics
+	defer func() {
+		if chErr := os.Chdir(originalDir); chErr != nil {
+			// Log the error but don't override the original error
+			log.Printf("Warning: failed to restore directory to %s: %v", originalDir, chErr)
+		}
+	}()
+
+	return fn()
 }
 
 func defaultDiscoveryGlobsForParent(parentType string) []string {
