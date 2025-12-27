@@ -312,7 +312,7 @@ func tokensForPrivateEndpointsLocal(resourceType string) hclwrite.Tokens {
 	//     }
 	//   )
 	// }
-	// 
+	//
 	// If there's no default mapping for this resource type, use:
 	// {
 	//   for k, v in var.private_endpoints : k => v
@@ -353,18 +353,18 @@ func tokensForPrivateEndpointsLocal(resourceType string) hclwrite.Tokens {
 	tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenColon, Bytes: []byte(":")})
 	tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenIdent, Bytes: []byte("k")})
 	tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenFatArrow, Bytes: []byte("=>")})
-	
+
 	// merge(v, { subresource_name = coalesce(v.subresource_name, "<default>") })
 	vSubresource := hclgen.TokensForTraversal("v", "subresource_name")
 	coalesceCall := hclwrite.TokensForFunctionCall("coalesce", vSubresource, hclwrite.TokensForValue(cty.StringVal(defaultSubresource)))
-	
+
 	mergeArg2 := hclwrite.TokensForObject([]hclwrite.ObjectAttrTokens{
 		{Name: hclwrite.TokensForIdentifier("subresource_name"), Value: coalesceCall},
 	})
-	
+
 	mergeCall := hclwrite.TokensForFunctionCall("merge", hclwrite.TokensForIdentifier("v"), mergeArg2)
 	tokens = append(tokens, mergeCall...)
 	tokens = append(tokens, &hclwrite.Token{Type: hclsyntax.TokenCBrace, Bytes: []byte("}")})
-	
+
 	return tokens
 }

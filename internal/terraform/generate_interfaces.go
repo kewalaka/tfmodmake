@@ -10,26 +10,26 @@ import (
 // based on ARM resource types. This helps avoid incorrect guesses for resources where the subresource
 // name is not obvious.
 var privateEndpointSubresourceMap = map[string]string{
-	"Microsoft.App/managedEnvironments":             "managedEnvironment",
-	"Microsoft.ContainerService/managedClusters":    "management",
-	"Microsoft.KeyVault/vaults":                     "vault",
-	"Microsoft.Storage/storageAccounts":             "blob", // Common default; users may override
-	"Microsoft.Sql/servers":                         "sqlServer",
-	"Microsoft.DBforPostgreSQL/flexibleServers":     "postgresqlServer",
-	"Microsoft.DBforMySQL/flexibleServers":          "mysqlServer",
-	"Microsoft.CognitiveServices/accounts":          "account",
-	"Microsoft.ContainerRegistry/registries":        "registry",
-	"Microsoft.EventHub/namespaces":                 "namespace",
-	"Microsoft.ServiceBus/namespaces":               "namespace",
-	"Microsoft.Web/sites":                           "sites",
-	"Microsoft.DocumentDB/databaseAccounts":         "Sql", // Cosmos DB
-	"Microsoft.Cache/redis":                         "redisCache",
-	"Microsoft.Network/applicationGateways":         "applicationGateway",
-	"Microsoft.Insights/components":                 "appInsights",
-	"Microsoft.Search/searchServices":               "searchService",
-	"Microsoft.SignalRService/signalR":              "signalR",
-	"Microsoft.Devices/IotHubs":                     "iotHub",
-	"Microsoft.ApiManagement/service":               "Gateway",
+	"Microsoft.App/managedEnvironments":          "managedEnvironment",
+	"Microsoft.ContainerService/managedClusters": "management",
+	"Microsoft.KeyVault/vaults":                  "vault",
+	"Microsoft.Storage/storageAccounts":          "blob", // Common default; users may override
+	"Microsoft.Sql/servers":                      "sqlServer",
+	"Microsoft.DBforPostgreSQL/flexibleServers":  "postgresqlServer",
+	"Microsoft.DBforMySQL/flexibleServers":       "mysqlServer",
+	"Microsoft.CognitiveServices/accounts":       "account",
+	"Microsoft.ContainerRegistry/registries":     "registry",
+	"Microsoft.EventHub/namespaces":              "namespace",
+	"Microsoft.ServiceBus/namespaces":            "namespace",
+	"Microsoft.Web/sites":                        "sites",
+	"Microsoft.DocumentDB/databaseAccounts":      "Sql", // Cosmos DB
+	"Microsoft.Cache/redis":                      "redisCache",
+	"Microsoft.Network/applicationGateways":      "applicationGateway",
+	"Microsoft.Insights/components":              "appInsights",
+	"Microsoft.Search/searchServices":            "searchService",
+	"Microsoft.SignalRService/signalR":           "signalR",
+	"Microsoft.Devices/IotHubs":                  "iotHub",
+	"Microsoft.ApiManagement/service":            "Gateway",
 }
 
 // generateInterfaces creates main.interfaces.tf with the AVM interfaces module wiring.

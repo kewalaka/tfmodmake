@@ -171,7 +171,7 @@ func TestIntegration_ComprehensiveValidations(t *testing.T) {
 
 	// Count total validations
 	validationCount := strings.Count(varsContent, "validation {")
-	// Expected: 
+	// Expected:
 	// - sku: 1 (enum)
 	// - resource_name: 2 (min, max)
 	// - correlation_id: 1 (uuid)
@@ -187,12 +187,12 @@ func TestIntegration_ComprehensiveValidations(t *testing.T) {
 // extractVariableBlock extracts the content of a specific variable block from the file
 func extractVariableBlock(t *testing.T, content, varName string) string {
 	t.Helper()
-	
+
 	start := strings.Index(content, `variable "`+varName+`"`)
 	if start == -1 {
 		return ""
 	}
-	
+
 	// Find the closing brace
 	braceCount := 0
 	inBlock := false
@@ -209,7 +209,7 @@ func extractVariableBlock(t *testing.T, content, varName string) string {
 			}
 		}
 	}
-	
+
 	if end > start {
 		return content[start:end]
 	}
