@@ -20,7 +20,7 @@ type ResolvedSpec struct {
 type ResolveRequest struct {
 	Seeds []string
 
-	GitHubDir string
+	GitHubServiceRoot string
 
 	DiscoverFromSeed bool
 
@@ -54,22 +54,22 @@ func (r defaultSpecResolver) Resolve(ctx context.Context, req ResolveRequest) (R
 		out.Specs = append(out.Specs, ResolvedSpec{Source: seed, Origin: "seed"})
 	}
 
-	if req.GitHubDir != "" {
-		loc, err := parseGitHubTreeDirURL(req.GitHubDir)
+	if req.GitHubServiceRoot != "" {
+		loc, err := parseGitHubTreeDirURL(req.GitHubServiceRoot)
 		if err != nil {
-			return ResolveResult{}, fmt.Errorf("invalid -github-dir: %w", err)
+			return ResolveResult{}, fmt.Errorf("invalid -spec-root: %w", err)
 		}
 
-		// Deterministic by default: treat -github-dir as a service root and select the latest stable
+		// Deterministic by default: treat -spec-root as a service root and select the latest stable
 		// version folder (optionally also include the latest preview folder).
 		urls, err := discoverDeterministicSpecSetFromGitHubDir(nil, loc, req.IncludeGlobs, req.GitHubToken, deterministicDiscoveryOptions{
 			IncludePreview: req.IncludePreview,
 		})
 		if err != nil {
-			return ResolveResult{}, fmt.Errorf("failed to discover specs from -github-dir: %w", err)
+			return ResolveResult{}, fmt.Errorf("failed to discover specs from -spec-root: %w", err)
 		}
 		for _, url := range urls {
-			out.Specs = append(out.Specs, ResolvedSpec{Source: url, Origin: "github-dir"})
+			out.Specs = append(out.Specs, ResolvedSpec{Source: url, Origin: "spec-root"})
 		}
 	}
 

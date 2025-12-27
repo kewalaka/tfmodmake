@@ -27,7 +27,7 @@ This spec proposes a clean internal separation while keeping a single-binary wor
 - **No required intermediate artifacts**: Resolved spec sets are passed in-memory by default.
 - **Deterministic**: Given the same inputs and GitHub directory state, the resolved spec list is ordered deterministically.
 - **Observable**: Users can optionally see what specs were resolved (without saving files).
-- **Backwards compatible UX**: Existing `children -discover*` flags continue to work, but are implemented via the resolver.
+- **Single-command workflow**: Keep discovery on `children` so you can go from “service root URL” to results in one command.
 - **Testable**: Resolver behavior can be unit-tested without exercising the analyzer.
 
 ## Non-Goals
@@ -61,7 +61,7 @@ Formatter → stdout
 ### Component boundaries
 
 - **Resolver**: Responsible for producing a `ResolvedSpecSet`.
-  - Inputs: seed URLs, GitHub dir, include globs, stable/preview preferences, “latest version” selection.
+  - Inputs: seed URLs, GitHub service root, include globs, include-preview.
   - Output: ordered list of spec sources with metadata (where it came from, why selected).
   - Does not parse OpenAPI.
 
@@ -83,23 +83,14 @@ Required fields:
   - List of initial spec sources (URLs or local paths).
 
 Optional fields:
-- `GitHubDir string`
+- `GitHubServiceRoot string`
   - A GitHub tree directory URL used as discovery root.
 
-- `Include []string`
+- `IncludeGlobs []string`
   - Glob patterns for matching spec file names in a GitHub directory listing.
 
-- `DeterministicLatest bool`
-  - Enable “latest version” selection.
-
 - `IncludePreview bool`
-  - Allow preview stability roots.
-
-- `PreferPreview bool`
-  - When both stable and preview exist for “latest”, prefer preview.
-
-- `NetworkPolicy`
-  - Controls token usage, timeouts, and whether network requests are allowed.
+  - Also include the latest preview API version folder (in addition to latest stable).
 
 ### ResolvedSpec
 A single resolved spec source.
@@ -108,7 +99,7 @@ A single resolved spec source.
   - URL or local path.
 
 - `Origin string`
-  - e.g. `"seed"`, `"github-dir"`, `"sibling"`.
+  - e.g. `"seed"`, `"spec-root"`, `"discover"`.
 
 - `APIVersionHint string`
   - Extracted from URL/path if available (e.g. `2025-06-01`).

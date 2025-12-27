@@ -118,7 +118,7 @@ func handleChildrenCommand() {
 
 	var specs stringSliceFlag
 	childrenCmd.Var(&specs, "spec", "Path or URL to OpenAPI spec (can be specified multiple times)")
-	githubDir := childrenCmd.String("github-dir", "", "GitHub directory URL (https://github.com/<owner>/<repo>/tree/<ref>/<dir>) to discover spec files from")
+	specRoot := childrenCmd.String("spec-root", "", "GitHub tree URL under Azure/azure-rest-api-specs (https://github.com/Azure/azure-rest-api-specs/tree/<ref>/<dir>)")
 	discoverFromSpec := childrenCmd.Bool("discover", false, "Discover additional spec files from the directory of the provided raw.githubusercontent.com -spec URL")
 	includePreview := childrenCmd.Bool("include-preview", false, "When discovering specs from a GitHub service root, also include the latest preview API version folder")
 	includeGlob := childrenCmd.String("include", "*.json", "Glob filter used when discovering spec files (matched against filename, e.g. ManagedEnvironments*.json)")
@@ -140,7 +140,7 @@ func handleChildrenCommand() {
 	resolver := defaultSpecResolver{}
 	resolveReq := ResolveRequest{
 		Seeds:            specs,
-		GitHubDir:         *githubDir,
+		GitHubServiceRoot: *specRoot,
 		DiscoverFromSeed:  *discoverFromSpec,
 		IncludeGlobs:      includeGlobs,
 		IncludePreview:    *includePreview,
@@ -162,7 +162,7 @@ func handleChildrenCommand() {
 	}
 
 	if len(specs) == 0 {
-		log.Fatalf("Usage: %s children -spec <path_or_url> [-discover] [-include-preview] [-include <glob>] [-github-dir <url>] -parent <resource_type> [-json]\nAt least one -spec is required (or use -github-dir / -discover to expand specs)", os.Args[0])
+		log.Fatalf("Usage: %s children -spec <path_or_url> [-discover] [-include-preview] [-include <glob>] [-spec-root <url>] -parent <resource_type> [-json]\nAt least one -spec is required (or use -spec-root / -discover to expand specs)", os.Args[0])
 	}
 
 	if *parent == "" {

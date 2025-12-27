@@ -138,6 +138,8 @@ The tool automatically generates Terraform validation blocks from OpenAPI schema
 - **Numeric validations**: minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf
 - **Enum validations**: Direct enum, allOf composition, Azure x-ms-enum extension
 
+All validations are null-safe for optional fields. See [docs/validations.md](docs/validations.md) for detailed documentation and examples.
+
 ## Advanced: Child Resource Discovery
 
 See also: [docs/children-discovery.md](docs/children-discovery.md)
@@ -156,28 +158,31 @@ The `children` command inspects OpenAPI specs and returns child resource types t
 
 **Discovery flags (advanced):**
 
-*   `-discover`: (Optional) If `-spec` is a `raw.githubusercontent.com` URL, discover additional spec files from the same GitHub directory (via the GitHub contents API) and include them automatically.
-*   `-github-dir`: (Optional) GitHub directory URL in the form `https://github.com/<owner>/<repo>/tree/<ref>/<dir>` to discover spec files from (via the GitHub contents API).
-*   `-include-preview`: (Optional) When discovering from a GitHub service root (`-github-dir`), also include specs from the latest preview API version folder.
-*   `-include`: (Optional) Glob matched against filenames when discovering spec files (default `*.json`). If you leave it as the default, `children` will try a narrower `ParentName*.json` pattern first (e.g. `ManagedEnvironments*.json`), and fall back to `*.json` if nothing matches.
+Recommended: use `-spec-root`.
+
+It gives you a deterministic “latest stable” starting point without manually enumerating spec URLs.
+
+Example:
+
+```bash
+./tfmodmake children \
+  -spec-root "https://github.com/Azure/azure-rest-api-specs/tree/main/specification/app/resource-manager/Microsoft.App/ContainerApps" \
+  -include-preview \
+  -parent "Microsoft.App/managedEnvironments"
+```
+
+Other discovery options (details in [docs/children-discovery.md](docs/children-discovery.md)):
+
+- `-discover`: when `-spec` is a `raw.githubusercontent.com` URL, pull in sibling spec files from the same directory.
+- `-include`: restrict which spec files are included during discovery (glob).
+- If you hit GitHub rate limits, set `GITHUB_TOKEN` (or `GH_TOKEN`) and retry.
 
 **Debugging:**
 
 *   `-print-resolved-specs`: (Optional) Print the final resolved spec list to **stderr** before analysis. Useful for diagnosing missing children without polluting stdout/JSON output.
-
-**Example (latest stable, plus preview):**
-
-```bash
-./tfmodmake children \
-  -github-dir "https://github.com/Azure/azure-rest-api-specs/tree/main/specification/app/resource-manager/Microsoft.App/ContainerApps" \
-  -include-preview \
-  -parent "Microsoft.App/managedEnvironments"
-```
 
 Output shows:
 *   **Deployable Child Resources**: Resources with PUT/PATCH operations and request body schemas
 *   **Filtered Out**: Resources that cannot be deployed (GET-only, missing body schema, etc.) with reasons
 
 Note: the default output is intentionally plain and compact for terminal use. Use `-json` if you want structured output (including example paths) for scripting or deeper inspection.
-
-All validations are null-safe for optional fields. See [docs/validations.md](docs/validations.md) for detailed documentation and examples.

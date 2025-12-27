@@ -37,7 +37,7 @@ To avoid requiring users to manually enumerate all sibling swagger files, `child
 
 ### What discovery does
 
-When enabled (`-discover` and/or `-github-dir`), `tfmodmake`:
+When enabled (`-discover` and/or `-spec-root`), `tfmodmake`:
 
 - Uses the GitHub Contents API to list files in a directory.
 - Filters filenames via a glob (for example `ManagedEnvironments*.json`).
@@ -49,7 +49,7 @@ This makes results more complete for split spec sets and dramatically reduces ma
 
 For module scoping, a common ask is “just give me a stable-by-default starting point.”
 
-When you use `-github-dir`, discovery selects the latest date-style API-version folder under `stable/` deterministically.
+When you use `-spec-root`, discovery selects the latest date-style API-version folder under `stable/` deterministically.
 
 Optionally also include the latest `preview/` folder with `-include-preview`.
 
@@ -112,7 +112,7 @@ If you need completeness across many versions, you generally need a broader craw
 
 If you’re using `children` to identify resources in-scope for a module, a practical workflow is:
 
-1. Start with latest stable (default behavior with `-github-dir`).
+1. Start with latest stable (default behavior with `-spec-root`).
 2. If you suspect the RP has newer surfaces, add latest preview (`-include-preview`).
 3. Treat the output as a starting list; confirm edge cases with real provider behavior.
 
@@ -122,7 +122,7 @@ Managed Environments (latest stable + preview):
 
 ```bash
 ./tfmodmake children \
-  -github-dir "https://github.com/Azure/azure-rest-api-specs/tree/main/specification/app/resource-manager/Microsoft.App/ContainerApps" \
+  -spec-root "https://github.com/Azure/azure-rest-api-specs/tree/main/specification/app/resource-manager/Microsoft.App/ContainerApps" \
   -include-preview \
   -parent "Microsoft.App/managedEnvironments"
 ```
