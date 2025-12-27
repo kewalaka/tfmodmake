@@ -1,39 +1,24 @@
 # tfmodmake
 
-CLI tool to generate base Terraform configuration (`variables.tf` and `locals.tf`) from an OpenAPI specification.
+CLI tool to generate base Terraform configuration from an OpenAPI specification.
 
 ## Features
 
-*   Parses OpenAPI 3.0 specifications from local files or URLs.
-*   Extracts schema for a specific resource type.
-*   Generates Terraform variables with appropriate types and descriptions.
-*   Flattens the OpenAPI top-level `properties` bag into idiomatic top-level Terraform variables.
-*   Handles nested objects and arrays.
-*   **Generates comprehensive validation blocks from schema constraints:**
-    *   String validations: `minLength`, `maxLength`, `pattern`, `format` (UUID)
-    *   Array validations: `minItems`, `maxItems`, `uniqueItems`
-    *   Numeric validations: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`
-    *   Enum validations: direct `enum`, `allOf`, Azure `x-ms-enum`
-    *   All validations are null-safe for optional fields
-*   Creates a `locals.tf` file to map Terraform variables back to the API JSON structure.
-*   Supports targeting a specific root object (e.g., `properties`) to exclude unwanted fields.
-*   Customizable local variable naming.
-*   Generates scaffolded `main.tf` and `outputs.tf` for an `azapi_resource`.
-*   Includes base variables for `name`, `parent_id`, and conditional `tags` (when the resource supports tags).
-*   **Generates `response_export_values` from computed (non-writable) fields in the schema:**
-    *   Automatically extracts computed/non-writable properties (including scalars and useful objects/arrays)
-    *   Applies filtering to remove noisy fields (array indices, `.status.`, `.provisioningError.`, `eTag`, timestamps)
-    *   Provides a useful starting point that module authors can trim to their needs
-*   Generates map-based module blocks for submodules using `addsub` command.
+*   **OpenAPI → Terraform scaffolding**: Generate `variables.tf`, `locals.tf`, `main.tf`, and `outputs.tf` for an `azapi_resource`.
+*   **Good Terraform ergonomics**: Strong typing, descriptions, nested object/array handling, and optional “flatten `properties`” variable shape.
+*   **Schema-driven validations**: Null-safe validation blocks from common constraints (lengths, patterns, ranges, enums).
+*   **Computed exports**: Auto-suggest `response_export_values` from read-only/non-writable response fields (with noise filtering).
+*   **Submodule helpers**: `addsub` generates map-based wrapper plumbing for submodules.
+*   **Scope discovery**: `children` lists deployable ARM child resource types under a parent (compact text or `-json`).
 
 ## Installation
 
 Build from source:
 
 ```bash
-git clone https://github.com/user/tfmodmake.git
+git clone https://github.com/matt-FFFFFF/tfmodmake.git
 cd tfmodmake
-go build -o tfmodmake cmd/tfmodmake/main.go
+go build -o tfmodmake ./cmd/tfmodmake
 ```
 
 ## Usage
@@ -154,3 +139,50 @@ The tool automatically generates Terraform validation blocks from OpenAPI schema
 - **Enum validations**: Direct enum, allOf composition, Azure x-ms-enum extension
 
 All validations are null-safe for optional fields. See [docs/validations.md](docs/validations.md) for detailed documentation and examples.
+
+## Advanced: Child Resource Discovery
+
+See also: [docs/children-discovery.md](docs/children-discovery.md)
+
+The `children` command inspects OpenAPI specs and returns child resource types that can be deployed under a parent resource.
+
+```bash
+./tfmodmake children -spec <path_or_url> -parent <resource_type> [-json]
+```
+
+**Common flags:**
+
+*   `-spec`: (Required, repeatable) Path or URL to OpenAPI specification. Can be specified multiple times to search across versions.
+*   `-parent`: (Required) Parent resource type (e.g., `Microsoft.App/managedEnvironments`).
+*   `-json`: (Optional) Output results as JSON instead of plain text.
+
+**Discovery flags (advanced):**
+
+Recommended: use `-spec-root`.
+
+It gives you a deterministic “latest stable” starting point without manually enumerating spec URLs.
+
+Example:
+
+```bash
+./tfmodmake children \
+  -spec-root "https://github.com/Azure/azure-rest-api-specs/tree/main/specification/app/resource-manager/Microsoft.App/ContainerApps" \
+  -include-preview \
+  -parent "Microsoft.App/managedEnvironments"
+```
+
+Other discovery options (details in [docs/children-discovery.md](docs/children-discovery.md)):
+
+- `-discover`: when `-spec` is a `raw.githubusercontent.com` URL, pull in sibling spec files from the same directory.
+- `-include`: restrict which spec files are included during discovery (glob).
+- If you hit GitHub rate limits, set `GITHUB_TOKEN` (or `GH_TOKEN`) and retry.
+
+**Debugging:**
+
+*   `-print-resolved-specs`: (Optional) Print the final resolved spec list to **stderr** before analysis. Useful for diagnosing missing children without polluting stdout/JSON output.
+
+Output shows:
+*   **Deployable Child Resources**: Resources with PUT/PATCH operations and request body schemas
+*   **Filtered Out**: Resources that cannot be deployed (GET-only, missing body schema, etc.) with reasons
+
+Note: the default output is intentionally plain and compact for terminal use. Use `-json` if you want structured output (including example paths) for scripting or deeper inspection.
