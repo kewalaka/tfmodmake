@@ -16,7 +16,68 @@ import (
 	"github.com/matt-FFFFFF/tfmodmake/internal/terraform"
 )
 
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `tfmodmake - Generate Terraform modules from OpenAPI specifications
+
+Usage:
+  tfmodmake [command] [flags]
+
+Commands:
+  (default)              Generate base module (same as 'gen')
+  gen                    Generate base module
+  gen submodule          Generate a child/submodule and wire it into parent
+  add submodule <path>   Generate wrapper for an existing submodule
+  add avm-interfaces     Generate main.interfaces.tf (opt-in AVM scaffolding)
+  discover children      List deployable child resource types
+
+Legacy Commands (still supported):
+  addsub <path>          Alias for 'add submodule'
+  addchild               Alias for 'gen submodule'
+  children               Alias for 'discover children'
+
+Flags for base generation (default / gen):
+  -spec string
+        Path or URL to the OpenAPI specification (required)
+  -resource string
+        Resource type to generate (e.g., Microsoft.ContainerService/managedClusters) (required)
+  -root string
+        Path to the root object (e.g., properties or properties.foo) (optional)
+  -local-name string
+        Name of the local variable to generate (default: resource_body or derived from root) (optional)
+
+Examples:
+  # Generate base module (default form)
+  tfmodmake -spec <url> -resource Microsoft.Test/tests
+
+  # Generate base module (explicit form)
+  tfmodmake gen -spec <url> -resource Microsoft.Test/tests
+
+  # Add AVM interfaces scaffolding
+  tfmodmake add avm-interfaces -resource Microsoft.Test/tests
+
+  # Generate wrapper for existing submodule
+  tfmodmake add submodule modules/secrets
+
+  # Generate child module
+  tfmodmake gen submodule -parent Microsoft.App/managedEnvironments \
+    -child Microsoft.App/managedEnvironments/storages \
+    -spec-root <github_tree_url>
+
+  # Discover child resources
+  tfmodmake discover children -parent Microsoft.App/managedEnvironments \
+    -spec-root <github_tree_url>
+
+For more information, visit: https://github.com/matt-FFFFFF/tfmodmake
+`)
+}
+
 func main() {
+	// Show help for -h or --help at top level
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help") {
+		printUsage()
+		os.Exit(0)
+	}
+
 	// Handle subcommands
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -145,14 +206,19 @@ func handleAddAVMInterfacesCommand() {
 }
 
 func handleDefaultGeneration() {
-	specPath := flag.String("spec", "", "Path or URL to the OpenAPI specification")
-	resourceType := flag.String("resource", "", "Resource type to generate Terraform configuration for (e.g. Microsoft.ContainerService/managedClusters)")
-	rootPath := flag.String("root", "", "Path to the root object (e.g. properties or properties.foo)")
-	localName := flag.String("local-name", "", "Name of the local variable to generate (default: resource_body or derived from root)")
-	flag.Parse()
+	genCmd := flag.NewFlagSet("gen", flag.ExitOnError)
+	genCmd.Usage = func() {
+		printUsage()
+	}
+	
+	specPath := genCmd.String("spec", "", "Path or URL to the OpenAPI specification")
+	resourceType := genCmd.String("resource", "", "Resource type to generate Terraform configuration for (e.g. Microsoft.ContainerService/managedClusters)")
+	rootPath := genCmd.String("root", "", "Path to the root object (e.g. properties or properties.foo)")
+	localName := genCmd.String("local-name", "", "Name of the local variable to generate (default: resource_body or derived from root)")
+	genCmd.Parse(os.Args[1:])
 
 	if *specPath == "" || *resourceType == "" {
-		flag.Usage()
+		printUsage()
 		os.Exit(1)
 	}
 
