@@ -19,6 +19,7 @@ func main() {
 			GenCommand(),
 			AddCommand(),
 			DiscoverCommand(),
+			UpdateCommand(),
 		},
 		DefaultCommand: "gen",
 	}
