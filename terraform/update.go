@@ -32,11 +32,15 @@ type UpdateSummary struct {
 type UpdateOptions struct {
 	// ModuleDir is the directory containing the existing module.
 	ModuleDir string
-	// OldSpecs is a list of paths or URLs to the old (current) OpenAPI spec files.
-	// Used to generate the baseline for 3-way comparison.
-	OldSpecs []string
-	// NewSpecs is a list of paths or URLs to the new OpenAPI spec files.
-	NewSpecs []string
+	// OldAPIVersion overrides the current API version used to generate the baseline
+	// for 3-way comparison. If empty, the version is extracted from main.tf.
+	OldAPIVersion string
+	// NewAPIVersion is the target API version to update the module to.
+	// If empty, the latest stable version is resolved automatically
+	// (or latest preview if IncludePreview is set).
+	NewAPIVersion string
+	// IncludePreview, when true, includes preview API versions when loading resources.
+	IncludePreview bool
 	// ResourceType overrides the resource type (if empty, inferred from main.tf).
 	ResourceType string
 	// LocalName overrides the local variable name (default: "resource_body").
@@ -70,6 +74,9 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extracting resource type and version: %w", err)
 	}
+	if opts.OldAPIVersion != "" {
+		oldVersion = opts.OldAPIVersion
+	}
 	if opts.ResourceType != "" {
 		resourceType = opts.ResourceType
 	}
@@ -91,10 +98,10 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 		onDiskLocalAssignments = ExtractLocalAssignments(localsFile)
 	}
 
-	// Step 2: Generate baseline from old (current) spec for dirty detection.
-	baselineResult, err := LoadResource(ctx, opts.OldSpecs, resourceType)
+	// Step 2: Generate baseline from old (current) API version for dirty detection.
+	baselineResult, err := LoadResource(ctx, resourceType, WithAPIVersionLoad(oldVersion))
 	if err != nil {
-		return nil, fmt.Errorf("loading resource from old specs: %w", err)
+		return nil, fmt.Errorf("loading resource for old API version: %w", err)
 	}
 	baselineModule, err := GenerateInMemory(resourceType,
 		baselineResult,
@@ -109,10 +116,10 @@ func Update(ctx context.Context, opts UpdateOptions) (*UpdateResult, error) {
 		baselineLocalAssignments = ExtractLocalAssignments(baselineModule.Locals)
 	}
 
-	// Step 3: Generate new module from new spec.
-	newResult, err := LoadResource(ctx, opts.NewSpecs, resourceType)
+	// Step 3: Generate new module from new API version.
+	newResult, err := LoadResource(ctx, resourceType, WithAPIVersionLoad(opts.NewAPIVersion), WithIncludePreview(opts.IncludePreview))
 	if err != nil {
-		return nil, fmt.Errorf("loading resource from new specs: %w", err)
+		return nil, fmt.Errorf("loading resource for new API version: %w", err)
 	}
 	newModule, err := GenerateInMemory(resourceType,
 		newResult,

@@ -14,14 +14,13 @@ func main() {
 	cmd := &cli.Command{
 		Version: version,
 		Name:    "tfmodmake",
-		Usage:   "Generate Terraform modules from OpenAPI specifications",
+		Usage:   "Generate Terraform modules from Azure resource type definitions",
 		Commands: []*cli.Command{
 			GenCommand(),
 			AddCommand(),
 			DiscoverCommand(),
 			UpdateCommand(),
 		},
-		DefaultCommand: "gen",
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {

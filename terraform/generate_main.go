@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/matt-FFFFFF/tfmodmake/hclgen"
 	"github.com/matt-FFFFFF/tfmodmake/naming"
+	"github.com/matt-FFFFFF/tfmodmake/schema"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -23,7 +24,7 @@ func cleanTypeString(typeStr string) string {
 	return strings.Join(cleaned, "/")
 }
 
-func buildMain(schema *openapi3.Schema, resourceType, apiVersion, localName string, supportsTags, supportsLocation, supportsIdentity, hasSchema bool, secrets []secretField) *hclwrite.File {
+func buildMain(rs *schema.ResourceSchema, resourceType, apiVersion, localName string, supportsTags, supportsLocation, supportsIdentity, hasSchema, hasDiscriminator bool, secrets []secretField) *hclwrite.File {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
@@ -46,6 +47,22 @@ func buildMain(schema *openapi3.Schema, resourceType, apiVersion, localName stri
 	resourceBody.SetAttributeValue("body", cty.EmptyObjectVal)
 	if hasSchema {
 		resourceBody.SetAttributeRaw("body", hclgen.TokensForTraversal("local", localName))
+	}
+
+	// Disable embedded schema validation for resources whose body contains a
+	// discriminated object type (e.g. javaComponents with componentType).
+	// The azapi provider performs enum validation on discriminator properties at
+	// plan/validate time, but Terraform passes "unknown" for unset variables
+	// which the provider rejects as an invalid discriminator value.
+	// TODO: re-enable once the azapi provider handles unknown discriminator values gracefully.
+	if hasDiscriminator {
+		resourceBody.AppendUnstructuredTokens(hclwrite.Tokens{
+			&hclwrite.Token{Type: hclsyntax.TokenComment, Bytes: []byte("# Disabled because the body contains a discriminated object type whose")},
+			&hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n")},
+			&hclwrite.Token{Type: hclsyntax.TokenComment, Bytes: []byte("# discriminator property value is unknown at validate time.")},
+			&hclwrite.Token{Type: hclsyntax.TokenNewline, Bytes: []byte("\n")},
+		})
+		resourceBody.SetAttributeValue("schema_validation_enabled", cty.False)
 	}
 
 	// Add sensitive_body if there are secrets
@@ -96,12 +113,12 @@ func buildMain(schema *openapi3.Schema, resourceType, apiVersion, localName stri
 	}
 
 	// Generate response_export_values from computed (non-writable) fields in the schema
-	exportPaths := extractComputedPaths(schema)
+	exportPaths := extractComputedPaths(rs)
 	resourceBody.SetAttributeRaw("response_export_values", hclgen.TokensForMultilineStringList(exportPaths))
 
 	return file
 }
 
-func generateMain(schema *openapi3.Schema, resourceType, apiVersion, localName string, supportsTags, supportsLocation, supportsIdentity, hasSchema bool, secrets []secretField, outputDir string) error {
-	return hclgen.WriteFileToDir(outputDir, "main.tf", buildMain(schema, resourceType, apiVersion, localName, supportsTags, supportsLocation, supportsIdentity, hasSchema, secrets))
+func generateMain(rs *schema.ResourceSchema, resourceType, apiVersion, localName string, supportsTags, supportsLocation, supportsIdentity, hasSchema, hasDiscriminator bool, secrets []secretField, outputDir string) error {
+	return hclgen.WriteFileToDir(outputDir, "main.tf", buildMain(rs, resourceType, apiVersion, localName, supportsTags, supportsLocation, supportsIdentity, hasSchema, hasDiscriminator, secrets))
 }
