@@ -275,7 +275,8 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 
 		// Flatten the standard ARM top-level "properties" bag into individual Terraform variables.
 		// This is the default module shape for full-schema generation (no -root), per DESIGN.md.
-		if name == "properties" && propSchema.Type != nil && slices.Contains(*propSchema.Type, "object") {
+		// Check for properties bag by looking at effective children, not just explicit type.
+		if name == "properties" {
 			propsSchema := propSchema
 
 			childProps, err := openapi.GetEffectiveProperties(propsSchema)
