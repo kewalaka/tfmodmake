@@ -14,7 +14,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-func generateLocals(schema *openapi3.Schema, localName string, supportsIdentity bool, secrets []secretField, resourceType string, caps openapi.InterfaceCapabilities, moduleNamePrefix string, outputDir string) error {
+func generateLocals(schema *openapi3.Schema, localName string, supportsIdentity bool, secrets []secretField, resourceType string, caps openapi.InterfaceCapabilities, moduleNamePrefix string, outputDir string, hacks HackSet) error {
 	if schema == nil {
 		return nil
 	}
@@ -26,7 +26,7 @@ func generateLocals(schema *openapi3.Schema, localName string, supportsIdentity 
 	localBody := locals.Body()
 
 	secretPaths := newSecretPathSet(secrets)
-	valueExpression, err := constructValue(schema, hclwrite.TokensForIdentifier("var"), true, secretPaths, "", supportsIdentity, moduleNamePrefix)
+	valueExpression, err := constructValue(schema, hclwrite.TokensForIdentifier("var"), true, secretPaths, "", supportsIdentity, moduleNamePrefix, hacks)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func generateLocals(schema *openapi3.Schema, localName string, supportsIdentity 
 	return hclgen.WriteFileToDir(outputDir, "locals.tf", file)
 }
 
-func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, secretPaths map[string]struct{}, moduleNamePrefix string) (hclwrite.Tokens, error) {
+func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, secretPaths map[string]struct{}, moduleNamePrefix string, hacks HackSet) (hclwrite.Tokens, error) {
 	// schema represents the OpenAPI schema at root.properties.
 	// The Terraform variables are flattened to var.<child> rather than var.properties.<child>.
 
@@ -74,7 +74,7 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 		if prop == nil || prop.Value == nil {
 			continue
 		}
-		if !isWritableProperty(prop.Value) {
+		if !isWritablePropertyInContext(k, prop.Value, effectiveProps, hacks) {
 			continue
 		}
 
@@ -94,7 +94,7 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 		childAccess = append(childAccess, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
 		childAccess = append(childAccess, hclwrite.TokensForIdentifier(snakeName)...)
 
-		childValue, err := constructValue(prop.Value, childAccess, false, secretPaths, "properties."+k, false, moduleNamePrefix)
+		childValue, err := constructValue(prop.Value, childAccess, false, secretPaths, "properties."+k, false, moduleNamePrefix, hacks)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +107,7 @@ func constructFlattenedRootPropertiesValue(schema *openapi3.Schema, accessPath h
 	return hclwrite.TokensForObject(attrs), nil
 }
 
-func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool, secretPaths map[string]struct{}, pathPrefix string, omitRootIdentity bool, moduleNamePrefix string) (hclwrite.Tokens, error) {
+func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot bool, secretPaths map[string]struct{}, pathPrefix string, omitRootIdentity bool, moduleNamePrefix string, hacks HackSet) (hclwrite.Tokens, error) {
 	if schema.Type == nil {
 		return accessPath, nil
 	}
@@ -117,7 +117,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 	if slices.Contains(types, "object") {
 		if len(schema.Properties) == 0 {
 			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
-				mappedValue, err := constructValue(schema.AdditionalProperties.Schema.Value, hclwrite.TokensForIdentifier("value"), false, secretPaths, pathPrefix, false, moduleNamePrefix)
+				mappedValue, err := constructValue(schema.AdditionalProperties.Schema.Value, hclwrite.TokensForIdentifier("value"), false, secretPaths, pathPrefix, false, moduleNamePrefix, hacks)
 				if err != nil {
 					return nil, err
 				}
@@ -175,7 +175,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 				continue
 			}
 
-			if !isWritableProperty(prop.Value) {
+			if !isWritablePropertyInContext(k, prop.Value, effectiveProps, hacks) {
 				continue
 			}
 
@@ -191,7 +191,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 
 			// Flatten the top-level "properties" bag into separate variables.
 			if isRoot && k == "properties" && prop.Value.Type != nil && slices.Contains(*prop.Value.Type, "object") && len(prop.Value.Properties) > 0 {
-				childValue, err := constructFlattenedRootPropertiesValue(prop.Value, accessPath, secretPaths, moduleNamePrefix)
+				childValue, err := constructFlattenedRootPropertiesValue(prop.Value, accessPath, secretPaths, moduleNamePrefix, hacks)
 				if err != nil {
 					return nil, err
 				}
@@ -208,7 +208,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 			childAccess = append(childAccess, &hclwrite.Token{Type: hclsyntax.TokenDot, Bytes: []byte(".")})
 			childAccess = append(childAccess, hclwrite.TokensForIdentifier(snakeName)...)
 
-			childValue, err := constructValue(prop.Value, childAccess, false, secretPaths, childPath, false, moduleNamePrefix)
+			childValue, err := constructValue(prop.Value, childAccess, false, secretPaths, childPath, false, moduleNamePrefix, hacks)
 			if err != nil {
 				return nil, err
 			}
@@ -227,7 +227,7 @@ func constructValue(schema *openapi3.Schema, accessPath hclwrite.Tokens, isRoot 
 
 	if slices.Contains(types, "array") {
 		if schema.Items != nil && schema.Items.Value != nil {
-			childValue, err := constructValue(schema.Items.Value, hclwrite.TokensForIdentifier("item"), false, secretPaths, pathPrefix+"[]", false, moduleNamePrefix)
+			childValue, err := constructValue(schema.Items.Value, hclwrite.TokensForIdentifier("item"), false, secretPaths, pathPrefix+"[]", false, moduleNamePrefix, hacks)
 			if err != nil {
 				return nil, err
 			}

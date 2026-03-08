@@ -120,7 +120,7 @@ func TestGenerateChildModuleIdempotency(t *testing.T) {
 	modulePath := filepath.Join(tmpDir, "modules", "children")
 
 	// First generation
-	if err := generateChildModule(context.Background(), []string{specPath}, "Microsoft.Test/parents/children", modulePath); err != nil {
+	if err := generateChildModule(context.Background(), []string{specPath}, "Microsoft.Test/parents/children", modulePath, nil); err != nil {
 		t.Fatalf("First generation failed: %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestGenerateChildModuleIdempotency(t *testing.T) {
 	}
 
 	// Second generation (idempotency test)
-	if err := generateChildModule(context.Background(), []string{specPath}, "Microsoft.Test/parents/children", modulePath); err != nil {
+	if err := generateChildModule(context.Background(), []string{specPath}, "Microsoft.Test/parents/children", modulePath, nil); err != nil {
 		t.Fatalf("Second generation failed: %v", err)
 	}
 

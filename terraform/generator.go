@@ -21,6 +21,7 @@ type generatorOptions struct {
 	spec             *openapi3.T
 	moduleNamePrefix string
 	outputDir        string
+	hacks            HackSet
 }
 
 // WithSchema sets the OpenAPI schema for the resource.
@@ -79,6 +80,13 @@ func WithOutputDir(dir string) GeneratorOption {
 	}
 }
 
+// WithHacks sets the enabled hacks for the generator.
+func WithHacks(hacks HackSet) GeneratorOption {
+	return func(o *generatorOptions) {
+		o.hacks = hacks
+	}
+}
+
 // WithLoadResult sets multiple options from a ResourceLoadResult.
 func WithLoadResult(result *ResourceLoadResult) GeneratorOption {
 	return func(o *generatorOptions) {
@@ -129,11 +137,11 @@ func generateWithOpts(o *generatorOptions) error {
 	if err := generateTerraform(o.outputDir); err != nil {
 		return err
 	}
-	if err := generateVariables(o.schema, o.supportsTags, o.supportsLocation, supportsIdentity, secrets, nameSchema, caps, o.moduleNamePrefix, o.outputDir); err != nil {
+	if err := generateVariables(o.schema, o.supportsTags, o.supportsLocation, supportsIdentity, secrets, nameSchema, caps, o.moduleNamePrefix, o.outputDir, o.hacks); err != nil {
 		return err
 	}
 	if hasSchema {
-		if err := generateLocals(o.schema, o.localName, supportsIdentity, secrets, o.resourceType, caps, o.moduleNamePrefix, o.outputDir); err != nil {
+		if err := generateLocals(o.schema, o.localName, supportsIdentity, secrets, o.resourceType, caps, o.moduleNamePrefix, o.outputDir, o.hacks); err != nil {
 			return err
 		}
 	}

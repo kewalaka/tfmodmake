@@ -760,7 +760,7 @@ func TestMapType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotTokens, err := mapType(tt.schema)
+			gotTokens, err := mapType(tt.schema, nil)
 			require.NoError(t, err)
 			got := string(gotTokens.Bytes())
 			assert.Equal(t, tt.want, got)
@@ -785,7 +785,7 @@ func TestBuildNestedDescription(t *testing.T) {
 		},
 	}
 
-	got, err := buildNestedDescription(schema, "")
+	got, err := buildNestedDescription(schema, "", nil)
 	require.NoError(t, err)
 	assert.Contains(t, got, "- `prop1` - Description 1")
 	assert.Contains(t, got, "- `nested` - Nested object")
@@ -821,7 +821,7 @@ func TestConstructValue_MapAdditionalPropertiesObject(t *testing.T) {
 		{Type: hclsyntax.TokenDot, Bytes: []byte(".")},
 		{Type: hclsyntax.TokenIdent, Bytes: []byte("kube_dns_overrides")},
 	}
-	tokens, err := constructValue(schema, accessPath, false, nil, "", false, "")
+	tokens, err := constructValue(schema, accessPath, false, nil, "", false, "", nil)
 	require.NoError(t, err)
 
 	f := hclwrite.NewEmptyFile()

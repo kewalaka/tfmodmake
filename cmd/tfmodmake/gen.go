@@ -33,6 +33,10 @@ func GenCommand() *cli.Command {
 				Name:  "local-name",
 				Usage: "Name of the local variable to generate (default: resource_body)",
 			},
+			&cli.StringSliceFlag{
+				Name:  "hack",
+				Usage: "Enable a named workaround for a known API spec deficiency (e.g. suppress-inline-id)",
+			},
 		},
 		Action: runGen,
 		Commands: []*cli.Command{
@@ -80,6 +84,10 @@ func GenCommand() *cli.Command {
 						Name:  "dry-run",
 						Usage: "Print planned actions without writing files",
 					},
+					&cli.StringSliceFlag{
+						Name:  "hack",
+						Usage: "Enable a named workaround for a known API spec deficiency (e.g. suppress-inline-id)",
+					},
 				},
 				Action: runAddChild,
 			},
@@ -121,6 +129,10 @@ func GenCommand() *cli.Command {
 						Name:  "dry-run",
 						Usage: "Print planned actions without writing files",
 					},
+					&cli.StringSliceFlag{
+						Name:  "hack",
+						Usage: "Enable a named workaround for a known API spec deficiency (e.g. suppress-inline-id)",
+					},
 				},
 				Action: runGenAVM,
 			},
@@ -132,12 +144,18 @@ func runGen(ctx context.Context, cmd *cli.Command) error {
 	specs := cmd.StringSlice("spec")
 	resourceType := cmd.String("resource")
 	localName := cmd.String("local-name")
+	hackNames := cmd.StringSlice("hack")
 
 	if len(specs) == 0 || resourceType == "" {
 		return cli.ShowSubcommandHelp(cmd)
 	}
 
-	return generateBaseModule(ctx, specs, resourceType, localName)
+	hacks, err := terraform.ParseHacks(hackNames)
+	if err != nil {
+		return err
+	}
+
+	return generateBaseModule(ctx, specs, resourceType, localName, hacks)
 }
 
 func runAddChild(ctx context.Context, cmd *cli.Command) error {
@@ -150,6 +168,7 @@ func runAddChild(ctx context.Context, cmd *cli.Command) error {
 	moduleDir := cmd.String("module-dir")
 	moduleName := cmd.String("module-name")
 	dryRun := cmd.Bool("dry-run")
+	hackNames := cmd.StringSlice("hack")
 
 	if len(specs) == 0 && specRoot == "" {
 		return fmt.Errorf("at least one -spec or -spec-root is required")
@@ -211,7 +230,12 @@ func runAddChild(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	if err := generateChildModule(ctx, specSources, child, modulePath); err != nil {
+	hacks, err := terraform.ParseHacks(hackNames)
+	if err != nil {
+		return err
+	}
+
+	if err := generateChildModule(ctx, specSources, child, modulePath, hacks); err != nil {
 		return fmt.Errorf("failed to generate child module: %w", err)
 	}
 
@@ -233,6 +257,7 @@ func runGenAVM(ctx context.Context, cmd *cli.Command) error {
 	localName := cmd.String("local-name")
 	moduleDir := cmd.String("module-dir")
 	dryRun := cmd.Bool("dry-run")
+	hackNames := cmd.StringSlice("hack")
 
 	if len(specs) == 0 && specRoot == "" {
 		return fmt.Errorf("at least one -spec or -spec-root is required")
@@ -271,6 +296,11 @@ func runGenAVM(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("no specs resolved. Please provide -spec or -spec-root")
 	}
 
+	hacks, err := terraform.ParseHacks(hackNames)
+	if err != nil {
+		return err
+	}
+
 	if dryRun {
 		fmt.Println("DRY RUN: Would execute the following steps:")
 		fmt.Printf("1. Generate base module for resource: %s\n", resourceType)
@@ -281,7 +311,7 @@ func runGenAVM(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	if err := orchestrateAVMGeneration(ctx, specSources, resourceType, localName, moduleDir); err != nil {
+	if err := orchestrateAVMGeneration(ctx, specSources, resourceType, localName, moduleDir, hacks); err != nil {
 		return fmt.Errorf("failed to generate AVM module: %w", err)
 	}
 
@@ -290,7 +320,7 @@ func runGenAVM(ctx context.Context, cmd *cli.Command) error {
 }
 
 // generateChildModule generates a child module scaffold at the specified path.
-func generateChildModule(ctx context.Context, specs []string, childType, modulePath string) error {
+func generateChildModule(ctx context.Context, specs []string, childType, modulePath string, hacks terraform.HackSet) error {
 	// Create module directory if it doesn't exist
 	if err := os.MkdirAll(modulePath, 0o755); err != nil {
 		return fmt.Errorf("failed to create module directory: %w", err)
@@ -318,6 +348,7 @@ func generateChildModule(ctx context.Context, specs []string, childType, moduleP
 		terraform.WithLocalName(localName),
 		terraform.WithModuleNamePrefix(moduleName),
 		terraform.WithOutputDir(modulePath),
+		terraform.WithHacks(hacks),
 	); err != nil {
 		return fmt.Errorf("failed to generate terraform files: %w", err)
 	}
@@ -326,10 +357,10 @@ func generateChildModule(ctx context.Context, specs []string, childType, moduleP
 }
 
 // orchestrateAVMGeneration performs the full AVM generation workflow
-func orchestrateAVMGeneration(ctx context.Context, specSources []string, resourceType, localName, moduleDir string) error {
+func orchestrateAVMGeneration(ctx context.Context, specSources []string, resourceType, localName, moduleDir string, hacks terraform.HackSet) error {
 	// Step 1: Generate base module
 	fmt.Println("Step 1/4: Generating base module...")
-	if err := generateBaseModule(ctx, specSources, resourceType, localName); err != nil {
+	if err := generateBaseModule(ctx, specSources, resourceType, localName, hacks); err != nil {
 		return fmt.Errorf("failed to generate base module: %w", err)
 	}
 
@@ -366,7 +397,7 @@ func orchestrateAVMGeneration(ctx context.Context, specSources []string, resourc
 			modulePath := filepath.Join(moduleDir, moduleName)
 
 			// Generate child module
-			if err := generateChildModule(ctx, specSources, child.ResourceType, modulePath); err != nil {
+			if err := generateChildModule(ctx, specSources, child.ResourceType, modulePath, hacks); err != nil {
 				return fmt.Errorf("failed to generate child module for %s: %w", child.ResourceType, err)
 			}
 
@@ -412,7 +443,7 @@ func isInterfaceManagedChild(childResourceType string) bool {
 }
 
 // generateBaseModule generates the base module files in the current directory
-func generateBaseModule(ctx context.Context, specSources []string, resourceType, localName string) error {
+func generateBaseModule(ctx context.Context, specSources []string, resourceType, localName string, hacks terraform.HackSet) error {
 	// Load the resource from specs
 	result, err := terraform.LoadResource(ctx, specSources, resourceType)
 	if err != nil {
@@ -429,5 +460,6 @@ func generateBaseModule(ctx context.Context, specSources []string, resourceType,
 	return terraform.Generate(resourceType,
 		result,
 		terraform.WithLocalName(finalLocalName),
+		terraform.WithHacks(hacks),
 	)
 }

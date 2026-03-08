@@ -15,7 +15,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, supportsIdentity bool, secrets []secretField, nameSchema *openapi3.Schema, caps openapi.InterfaceCapabilities, moduleNamePrefix string, outputDir string) error {
+func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, supportsIdentity bool, secrets []secretField, nameSchema *openapi3.Schema, caps openapi.InterfaceCapabilities, moduleNamePrefix string, outputDir string, hacks HackSet) error {
 	file := hclwrite.NewEmptyFile()
 	body := file.Body()
 
@@ -37,11 +37,11 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 		if err != nil {
 			return false, fmt.Errorf("getting effective properties for array item schema: %w", err)
 		}
-		for _, prop := range props {
+		for propName, prop := range props {
 			if prop == nil || prop.Value == nil {
 				continue
 			}
-			if !isWritableProperty(prop.Value) {
+			if !isWritablePropertyInContext(propName, prop.Value, props, hacks) {
 				continue
 			}
 			if isSecretField(prop.Value) {
@@ -77,7 +77,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 			return nil, nil
 		}
 
-		tfType, err := mapType(propSchema)
+		tfType, err := mapType(propSchema, hacks)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +115,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 				sb.WriteString("Map values:\n")
 			}
 
-			nested, err := buildNestedDescription(nestedDocSchema, "")
+			nested, err := buildNestedDescription(nestedDocSchema, "", hacks)
 			if err != nil {
 				return nil, err
 			}
@@ -302,7 +302,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 					continue
 				}
 				childSchema := childRef.Value
-				if !isWritableProperty(childSchema) {
+				if !isWritablePropertyInContext(childName, childSchema, childProps, hacks) {
 					continue
 				}
 
@@ -335,7 +335,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 			continue
 		}
 
-		if !isWritableProperty(propSchema) {
+		if !isWritablePropertyInContext(name, propSchema, effectiveProps, hacks) {
 			continue
 		}
 
@@ -376,7 +376,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 			secretBlockAdded = true
 		}
 
-		tfType, err := mapType(secret.schema)
+		tfType, err := mapType(secret.schema, hacks)
 		if err != nil {
 			return err
 		}
@@ -469,7 +469,7 @@ func generateVariables(schema *openapi3.Schema, supportsTags, supportsLocation, 
 	return hclgen.WriteFileToDir(outputDir, "variables.tf", file)
 }
 
-func mapType(schema *openapi3.Schema) (hclwrite.Tokens, error) {
+func mapType(schema *openapi3.Schema, hacks HackSet) (hclwrite.Tokens, error) {
 	if schema.Type == nil {
 		return hclwrite.TokensForIdentifier("any"), nil
 	}
@@ -489,7 +489,7 @@ func mapType(schema *openapi3.Schema) (hclwrite.Tokens, error) {
 		elemType := hclwrite.TokensForIdentifier("any")
 		if schema.Items != nil && schema.Items.Value != nil {
 			var err error
-			elemType, err = mapType(schema.Items.Value)
+			elemType, err = mapType(schema.Items.Value, hacks)
 			if err != nil {
 				return nil, err
 			}
@@ -509,7 +509,7 @@ func mapType(schema *openapi3.Schema) (hclwrite.Tokens, error) {
 
 		if len(effectiveProps) == 0 {
 			if schema.AdditionalProperties.Schema != nil && schema.AdditionalProperties.Schema.Value != nil {
-				valueType, err := mapType(schema.AdditionalProperties.Schema.Value)
+				valueType, err := mapType(schema.AdditionalProperties.Schema.Value, hacks)
 				if err != nil {
 					return nil, err
 				}
@@ -531,10 +531,10 @@ func mapType(schema *openapi3.Schema) (hclwrite.Tokens, error) {
 			if prop == nil || prop.Value == nil {
 				continue
 			}
-			if !isWritableProperty(prop.Value) {
+			if !isWritablePropertyInContext(k, prop.Value, effectiveProps, hacks) {
 				continue
 			}
-			fieldType, err := mapType(prop.Value)
+			fieldType, err := mapType(prop.Value, hacks)
 			if err != nil {
 				return nil, err
 			}
@@ -559,7 +559,7 @@ func mapType(schema *openapi3.Schema) (hclwrite.Tokens, error) {
 	return hclwrite.TokensForIdentifier("any"), nil
 }
 
-func buildNestedDescription(schema *openapi3.Schema, indent string) (string, error) {
+func buildNestedDescription(schema *openapi3.Schema, indent string, hacks HackSet) (string, error) {
 	var sb strings.Builder
 
 	// Get effective properties for allOf handling
@@ -588,7 +588,7 @@ func buildNestedDescription(schema *openapi3.Schema, indent string) (string, err
 		}
 		val := childProp.Value
 
-		if !isWritableProperty(val) {
+		if !isWritablePropertyInContext(k, val, effectiveProps, hacks) {
 			continue
 		}
 
@@ -613,7 +613,7 @@ func buildNestedDescription(schema *openapi3.Schema, indent string) (string, err
 			return "", fmt.Errorf("getting effective properties for nested object: %w", err)
 		}
 		if isNested && len(nestedProps) > 0 {
-			nested, err := buildNestedDescription(val, indent+"  ")
+			nested, err := buildNestedDescription(val, indent+"  ", hacks)
 			if err != nil {
 				return "", err
 			}
