@@ -62,7 +62,7 @@ func runDiscoverChildren(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to parse bicep-types index: %w", err)
 	}
 
-	children := schema.DiscoverChildren(idx, parent, 1)
+	children := schema.DiscoverChildren(idx, parent, 0)
 
 	if jsonOutput {
 		data, err := json.MarshalIndent(children, "", "  ")
